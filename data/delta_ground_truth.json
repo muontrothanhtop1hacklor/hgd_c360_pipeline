@@ -1,0 +1,198 @@
+{
+  "executed_at": "2026-11-10 15:26:49",
+  "inserted_new_citizens": [
+    {
+      "MA_CD": "9900000001",
+      "MA_HO_GD": "HGD_NEW_0001",
+      "ID": 5251
+    },
+    {
+      "MA_CD": "9900000002",
+      "MA_HO_GD": "HGD_NEW_0002",
+      "ID": 5252
+    },
+    {
+      "MA_CD": "9900000003",
+      "MA_HO_GD": "HGD_NEW_0003",
+      "ID": 5253
+    },
+    {
+      "MA_CD": "9900000004",
+      "MA_HO_GD": "HGD_NEW_0004",
+      "ID": 5254
+    },
+    {
+      "MA_CD": "9900000005",
+      "MA_HO_GD": "HGD_NEW_0005",
+      "ID": 5255
+    }
+  ],
+  "inserted_new_household_for_existing": [
+    {
+      "MA_CD": "0000000004",
+      "OLD_MA_HO_GD": "HGD000000004_1",
+      "NEW_MA_HO_GD": "HGD_DELTA_NEW_0000000004",
+      "NEW_ID": 5256,
+      "EXPECTED_MA_TINH_THUONG_TRU": "79",
+      "EXPECTED_MA_XA_THUONG_TRU": "26734"
+    },
+    {
+      "MA_CD": "0000000005",
+      "OLD_MA_HO_GD": "HGD000000005_1",
+      "NEW_MA_HO_GD": "HGD_DELTA_NEW_0000000005",
+      "NEW_ID": 5257,
+      "EXPECTED_MA_TINH_THUONG_TRU": "79",
+      "EXPECTED_MA_XA_THUONG_TRU": "26734"
+    },
+    {
+      "MA_CD": "0000000006",
+      "OLD_MA_HO_GD": "HGD000000006_1",
+      "NEW_MA_HO_GD": "HGD_DELTA_NEW_0000000006",
+      "NEW_ID": 5258,
+      "EXPECTED_MA_TINH_THUONG_TRU": "79",
+      "EXPECTED_MA_XA_THUONG_TRU": "26734"
+    }
+  ],
+  "updated_dirty_to_clean": [
+    {
+      "ID": 32,
+      "MA_CD": "0000000030",
+      "MA_HO_GD": "HGD000000030_1",
+      "EXPECTED_DQ_FLAGS": null
+    },
+    {
+      "ID": 33,
+      "MA_CD": "0000000031",
+      "MA_HO_GD": "HGD000000031_1",
+      "EXPECTED_DQ_FLAGS": null
+    },
+    {
+      "ID": 137,
+      "MA_CD": "0000000130",
+      "MA_HO_GD": "HGD000000130_1",
+      "EXPECTED_DQ_FLAGS": null
+    },
+    {
+      "ID": 138,
+      "MA_CD": "0000000131",
+      "MA_HO_GD": "HGD000000131_1",
+      "EXPECTED_DQ_FLAGS": null
+    },
+    {
+      "ID": 242,
+      "MA_CD": "0000000230",
+      "MA_HO_GD": "HGD000000230_1",
+      "EXPECTED_DQ_FLAGS": null
+    }
+  ],
+  "updated_status_to_filtered_out": [
+    {
+      "ID": 22,
+      "MA_CD": "0000000021",
+      "MA_HO_GD": "HGD000000021_1",
+      "REASON": "TRANG_THAI_DUYET=0"
+    },
+    {
+      "ID": 23,
+      "MA_CD": "0000000022",
+      "MA_HO_GD": "HGD000000022_1",
+      "REASON": "TYPEID='D'"
+    },
+    {
+      "ID": 24,
+      "MA_CD": "0000000023",
+      "MA_HO_GD": "HGD000000023_1",
+      "REASON": "TRANG_THAI_DUYET=0"
+    },
+    {
+      "ID": 25,
+      "MA_CD": "0000000024",
+      "MA_HO_GD": "HGD000000024_1",
+      "REASON": "TYPEID='D'"
+    }
+  ],
+  "updated_status_to_deceased": [
+    {
+      "ID": 56,
+      "MA_CD": "0000000053",
+      "MA_HO_GD": "HGD000000053_1",
+      "EXPECTED_TRANG_THAI_HIEU_LUC": 0
+    },
+    {
+      "ID": 57,
+      "MA_CD": "0000000054",
+      "MA_HO_GD": "HGD000000054_1",
+      "EXPECTED_TRANG_THAI_HIEU_LUC": 0
+    }
+  ],
+  "updated_ma_cd_reissued": [
+    {
+      "ID": 85,
+      "MA_CD_OLD": "0000000081",
+      "MA_CD_NEW": "8800000001",
+      "MA_HO_GD": "HGD000000081_1"
+    },
+    {
+      "ID": 86,
+      "MA_CD_OLD": "0000000082",
+      "MA_CD_NEW": "8800000002",
+      "MA_HO_GD": "HGD000000082_1"
+    },
+    {
+      "ID": 87,
+      "MA_CD_OLD": "0000000083",
+      "MA_CD_NEW": "8800000003",
+      "MA_HO_GD": "HGD000000083_1"
+    }
+  ],
+  "deleted_latest_household_fallback": [
+    {
+      "MA_CD": "0000000003",
+      "DELETED_ID": 4,
+      "DELETED_MA_HO_GD": "HGD000000003_2",
+      "FALLBACK_ID": 3,
+      "FALLBACK_MA_HO_GD": "HGD000000003_1",
+      "FALLBACK_MA_TINH": "01",
+      "FALLBACK_MA_XA": "00292"
+    },
+    {
+      "MA_CD": "0000000004",
+      "DELETED_ID": 5256,
+      "DELETED_MA_HO_GD": "HGD_DELTA_NEW_0000000004",
+      "FALLBACK_ID": 5,
+      "FALLBACK_MA_HO_GD": "HGD000000004_1",
+      "FALLBACK_MA_TINH": "01",
+      "FALLBACK_MA_XA": "00082"
+    },
+    {
+      "MA_CD": "0000000005",
+      "DELETED_ID": 5257,
+      "DELETED_MA_HO_GD": "HGD_DELTA_NEW_0000000005",
+      "FALLBACK_ID": 6,
+      "FALLBACK_MA_HO_GD": "HGD000000005_1",
+      "FALLBACK_MA_TINH": "01",
+      "FALLBACK_MA_XA": "00091"
+    }
+  ],
+  "deleted_single_household_citizen": [
+    {
+      "ID": 127,
+      "MA_CD": "0000000121",
+      "MA_HO_GD": "HGD000000121_1"
+    },
+    {
+      "ID": 128,
+      "MA_CD": "0000000122",
+      "MA_HO_GD": "HGD000000122_1"
+    },
+    {
+      "ID": 129,
+      "MA_CD": "0000000123",
+      "MA_HO_GD": "HGD000000123_1"
+    }
+  ],
+  "cdc_mirror_sync": {
+    "mirror_upserted": 22,
+    "mirror_deleted": 9
+  }
+}

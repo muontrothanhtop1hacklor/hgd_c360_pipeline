@@ -1,0 +1,29 @@
+# Environment & Secrets
+.env
+*.env.local
+
+# Python cache & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+
+# Generated data & local databases (keep only data/danhmuc/*.csv)
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/generated/
+data/logs/
+data/checkpoints/
+*.parquet
+*.orc
+
+# Docker volumes
+volumes/
+oracle_data/
+kafka_data/
+airflow_logs/
+

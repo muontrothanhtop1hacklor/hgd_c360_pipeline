@@ -1,0 +1,25 @@
+{
+  "name": "mirror-oracle-jdbc-sink-nhankhau",
+  "config": {
+    "connector.class": "io.debezium.connector.jdbc.JdbcSinkConnector",
+    "tasks.max": "4",
+    "topics": "vss_cdc.VSS.VSS_HO_GD_NHANKHAU",
+    "connection.url": "jdbc:oracle:thin:@//oracle-db:1521/FREEPDB1",
+    "connection.username": "MIRROR",
+    "connection.password": "mirror123",
+    "insert.mode": "upsert",
+    "delete.enabled": "true",
+    "primary.key.mode": "record_key",
+    "primary.key.fields": "MA_CD,MA_HO_GD",
+    "table.name.format": "MIR_VSS_HO_GD_NHANKHAU",
+    "batch.size": "3000",
+    "schema.evolution": "none",
+    "quote.identifiers": "false",
+    "consumer.override.max.poll.records": "2000",
+    "consumer.override.fetch.min.bytes": "65536",
+    "consumer.override.fetch.max.wait.ms": "500",
+    "errors.tolerance": "none",
+    "errors.log.enable": "true",
+    "errors.log.include.messages": "true"
+  }
+}
