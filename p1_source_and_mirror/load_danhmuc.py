@@ -141,9 +141,9 @@ def load_dm_dbhc(conn: Any, csv_path: Path, inject_moho: bool = True) -> int:
             if inject_moho and tinh_trang == "1" and is_cap_xa == 1 and ngay_het_hl and ngay_het_hl.startswith("2099-12-31"):
                 if ma_dbhc == "00004" and ma_cha == "01":
                     ma_dbhc_sn = f"{ma_dbhc_sn};00999;00998" if ma_dbhc_sn else "00999;00998"
-                elif ma_dbhc == "00007" and ma_cha == "01":
+                elif ma_dbhc == "00008" and ma_cha == "01":
                     ma_dbhc_sn = f"{ma_dbhc_sn};00999" if ma_dbhc_sn else "00999"
-                elif ma_dbhc == "11956" and ma_cha == "33":
+                elif ma_dbhc == "11953" and ma_cha == "33":
                     ma_dbhc_sn = f"{ma_dbhc_sn};00998" if ma_dbhc_sn else "00998"
 
             rows.append(

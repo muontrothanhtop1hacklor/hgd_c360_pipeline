@@ -9,6 +9,7 @@ cho dự án HGD -> Mirror -> C360 -> BI & API.
   2 vùng bảng Nguồn (VSS_*) và Mirror (MIR_VSS_*), bao gồm cả Unique Index UK_MIR_NK (MA_CD, MA_HO_GD).
 """
 
+import hashlib
 import os
 import sqlite3
 import sys
@@ -292,3 +293,223 @@ def init_source_and_mirror_schema(conn: Any, engine: str = "LOCAL_SQLITE") -> No
     )
 
     conn.commit()
+
+
+def init_c360_schema(conn: Any, engine: str = "LOCAL_SQLITE") -> None:
+    """Khởi tạo đầy đủ bảng C360, bảng Map, Queue, Control, Log, API tables & Triggers."""
+    if engine == "ORACLE":
+        return
+
+    cur = conn.cursor()
+
+    # 1. Bảng Map Tỉnh
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS C360_MAP_DBHC_TINH (
+            MA_TINH_LOOKUP TEXT PRIMARY KEY,
+            MA_TINH_MOI TEXT NOT NULL,
+            TEN_TINH_MOI TEXT NOT NULL,
+            LOAI_MAP TEXT NOT NULL
+        );
+        """
+    )
+
+    # 2. Bảng Map Xã
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS C360_MAP_DBHC_XA (
+            MA_XA_LOOKUP TEXT PRIMARY KEY,
+            MA_XA_MOI TEXT,
+            TEN_XA_MOI TEXT,
+            MA_TINH_MOI TEXT,
+            TEN_TINH_MOI TEXT,
+            LOAI_MAP TEXT NOT NULL
+        );
+        """
+    )
+
+    # 3. Bảng Chuẩn hóa C360
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS C360_THONG_TIN_CA_NHAN (
+            ID INTEGER PRIMARY KEY AUTOINCREMENT,
+            MA_SO_BHXH TEXT UNIQUE NOT NULL,
+            MA_SO_BHXH_CU TEXT,
+            SO_DINH_DANH TEXT,
+            HO_TEN TEXT NOT NULL,
+            HO_TEN_KHONG_DAU TEXT NOT NULL,
+            GIOI_TINH INTEGER,
+            NGAY_SINH_CHUAN TEXT,
+            NGAY_SINH_GOC TEXT,
+            SO_CCCD TEXT,
+            SO_CMTND TEXT,
+            SO_DIEN_THOAI TEXT,
+            EMAIL TEXT,
+            MA_TINH_THUONG_TRU TEXT,
+            TEN_TINH_THUONG_TRU TEXT,
+            MA_XA_THUONG_TRU TEXT,
+            TEN_XA_THUONG_TRU TEXT,
+            DIA_CHI_THUONG_TRU TEXT,
+            MA_TINH_LIEN_HE TEXT,
+            MA_XA_LIEN_HE TEXT,
+            DIA_CHI_LIEN_HE TEXT,
+            MA_TINH_KHAI_SINH TEXT,
+            MA_XA_KHAI_SINH TEXT,
+            DIA_CHI_KHAI_SINH TEXT,
+            DM_DAN_TOC_ID INTEGER,
+            MA_DAN_TOC TEXT,
+            TEN_DAN_TOC TEXT,
+            QUOC_TICH_RAW TEXT,
+            MA_QUOC_TICH TEXT,
+            TEN_QUOC_TICH TEXT,
+            IS_ALIVE INTEGER DEFAULT 1,
+            DEAD_DATE TEXT,
+            SOURCE_MA_HO_GD TEXT,
+            SOURCE_MODIFY_DATE TEXT,
+            SOURCE_CREATED_DATE TEXT,
+            DQ_FLAGS TEXT,
+            SYNC_DATE TEXT DEFAULT (datetime('now', 'localtime')),
+            SYNC_BATCH_ID INTEGER
+        );
+        """
+    )
+
+    # Chỉ mục C360
+    cur.execute("CREATE INDEX IF NOT EXISTS IDX_C360_MA_CU ON C360_THONG_TIN_CA_NHAN (MA_SO_BHXH_CU);")
+    cur.execute("CREATE INDEX IF NOT EXISTS IDX_C360_SO_DINH_DANH ON C360_THONG_TIN_CA_NHAN (SO_DINH_DANH);")
+    cur.execute("CREATE INDEX IF NOT EXISTS IDX_C360_TIM_KIEM ON C360_THONG_TIN_CA_NHAN (HO_TEN_KHONG_DAU, NGAY_SINH_CHUAN);")
+    cur.execute("CREATE INDEX IF NOT EXISTS IDX_C360_THAY_DOI ON C360_THONG_TIN_CA_NHAN (SYNC_DATE, ID);")
+    cur.execute("CREATE INDEX IF NOT EXISTS IDX_C360_TINH ON C360_THONG_TIN_CA_NHAN (MA_TINH_THUONG_TRU);")
+
+    # 4. Bảng Hàng đợi Queue
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS C360_SYNC_QUEUE (
+            QUEUE_ID INTEGER PRIMARY KEY AUTOINCREMENT,
+            MA_CD TEXT NOT NULL,
+            ACTION TEXT DEFAULT 'UPSERT',
+            ENQUEUE_TIME TEXT DEFAULT (datetime('now', 'localtime')),
+            STATUS TEXT DEFAULT 'PENDING'
+        );
+        """
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS IDX_QUEUE_STATUS ON C360_SYNC_QUEUE (STATUS, ENQUEUE_TIME);")
+
+    # 5. Bảng Điều khiển Đồng bộ Sync Control
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS C360_SYNC_CONTROL (
+            PROCESS_NAME TEXT PRIMARY KEY,
+            PAUSE_NRT INTEGER DEFAULT 0,
+            LAST_FULL_LOAD_TIME TEXT,
+            LAST_NRT_RUN TEXT,
+            LAST_NRT_STATUS TEXT DEFAULT 'READY'
+        );
+        """
+    )
+    cur.execute(
+        """
+        INSERT OR IGNORE INTO C360_SYNC_CONTROL (PROCESS_NAME, PAUSE_NRT, LAST_NRT_STATUS)
+        VALUES ('C360_SYNC', 0, 'READY');
+        """
+    )
+
+    # 6. Bảng Nhật ký Đồng bộ Sync Log
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS C360_SYNC_LOG (
+            LOG_ID INTEGER PRIMARY KEY AUTOINCREMENT,
+            BATCH_TYPE TEXT NOT NULL,
+            START_TIME TEXT NOT NULL,
+            END_TIME TEXT,
+            AFFECTED_KEYS INTEGER DEFAULT 0,
+            MERGE_COUNT INTEGER DEFAULT 0,
+            DELETE_COUNT INTEGER DEFAULT 0,
+            STATUS TEXT NOT NULL,
+            ERROR_MSG TEXT
+        );
+        """
+    )
+
+    # 7. Bảng Quản lý API Clients
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS C360_API_CLIENTS (
+            CLIENT_ID TEXT PRIMARY KEY,
+            API_KEY_HASH TEXT NOT NULL,
+            CLIENT_NAME TEXT NOT NULL,
+            SCOPES TEXT NOT NULL,
+            IS_ACTIVE INTEGER DEFAULT 1,
+            CREATED_DATE TEXT DEFAULT (datetime('now', 'localtime'))
+        );
+        """
+    )
+
+    # Seed Default Client & API Key: 'c360_secret_key_demo_2026'
+    demo_key_hash = hashlib.sha256(b"c360_secret_key_demo_2026").hexdigest()
+    cur.execute(
+        """
+        INSERT OR IGNORE INTO C360_API_CLIENTS (CLIENT_ID, API_KEY_HASH, CLIENT_NAME, SCOPES, IS_ACTIVE)
+        VALUES ('client_internal', ?, 'Internal Service Client', 'read:single,read:batch,read:search,read:changes', 1);
+        """,
+        (demo_key_hash,),
+    )
+
+    # 8. Bảng Nhật ký Audit API
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS C360_API_AUDIT_LOG (
+            AUDIT_ID INTEGER PRIMARY KEY AUTOINCREMENT,
+            CLIENT_ID TEXT,
+            ENDPOINT TEXT NOT NULL,
+            METHOD TEXT NOT NULL,
+            QUERY_PARAM TEXT,
+            RESPONSE_STATUS INTEGER NOT NULL,
+            EXEC_TIME_MS REAL,
+            MATCHED_BY TEXT,
+            IP_ADDRESS TEXT,
+            CREATED_TIME TEXT DEFAULT (datetime('now', 'localtime'))
+        );
+        """
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS IDX_AUDIT_CLIENT_DATE ON C360_API_AUDIT_LOG (CLIENT_ID, CREATED_TIME);")
+
+    # 9. Trigger trên bảng Mirror để đẩy sự kiện vào Queue
+    cur.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS TRG_MIR_NK_QUEUE_INS
+        AFTER INSERT ON MIR_VSS_HO_GD_NHANKHAU
+        FOR EACH ROW
+        BEGIN
+            INSERT INTO C360_SYNC_QUEUE (MA_CD, ACTION) VALUES (NEW.MA_CD, 'INSERT');
+        END;
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS TRG_MIR_NK_QUEUE_DEL
+        AFTER DELETE ON MIR_VSS_HO_GD_NHANKHAU
+        FOR EACH ROW
+        BEGIN
+            INSERT INTO C360_SYNC_QUEUE (MA_CD, ACTION) VALUES (OLD.MA_CD, 'DELETE');
+        END;
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS TRG_MIR_NK_QUEUE_UPD
+        AFTER UPDATE ON MIR_VSS_HO_GD_NHANKHAU
+        FOR EACH ROW
+        BEGIN
+            INSERT INTO C360_SYNC_QUEUE (MA_CD, ACTION) VALUES (NEW.MA_CD, 'UPDATE');
+            INSERT INTO C360_SYNC_QUEUE (MA_CD, ACTION)
+            SELECT OLD.MA_CD, 'UPDATE_OLD'
+            WHERE OLD.MA_CD <> NEW.MA_CD;
+        END;
+        """
+    )
+
+    conn.commit()
+

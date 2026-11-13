@@ -11,11 +11,11 @@ Bảng tổng hợp tiến độ và liên kết trực tiếp đến tài liệ
 
 | Tuần | Tên Phân Hệ & Phạm Vi Nghiệp Vụ | Thư Mục | Trạng Thái | Tài Liệu Chi Tiết |
 | :---: | :--- | :---: | :---: | :--- |
-| **-** | **Bộ Tài Liệu Thiết Kế (Basic & Detail Design)** | `design/` | **HOÀN THÀNH** | [Tài liệu Thiết kế Hệ thống](design/README.md) |
+| **-** | **Bộ Tài Liệu Thiết Kế (Basic & Detail Design)** | `design/` | **HOÀN THÀNH 100%** | [Tài liệu Thiết kế Hệ thống](design/README.md) |
 | **Tuần 1** | **Khảo sát, Thiết kế, Sinh dữ liệu giả lập & Đồng bộ Nguồn $\rightarrow$ Mirror** | `p1_source_and_mirror/` | **HOÀN THÀNH 100%** | [README Chi Tiết Tuần 1](p1_source_and_mirror/README.md) |
-| **Tuần 2** | **Chuẩn hóa dữ liệu công dân (C360) & Đồng bộ Near Real-time qua Queue** | `p2_c360_standardization/` | **KẾ HOẠCH & ĐẶC TẢ** | [README Chi Tiết Tuần 2](p2_c360_standardization/README.md) |
-| **Tuần 3** | **Job Đối soát dữ liệu 3 tầng, Dashboard BI & Dịch vụ 4 REST APIs C360** | `p3_reconciliation_bi_api/` | **KẾ HOẠCH & ĐẶC TẢ** | [README Chi Tiết Tuần 3](p3_reconciliation_bi_api/README.md) |
-| **Tuần 4** | **Lập lịch Apache Airflow, Kịch bản Kiểm thử Toàn trình E2E & Nghiệm thu** | `p4_airflow_and_e2e_test/` | **KẾ HOẠCH & ĐẶC TẢ** | [README Chi Tiết Tuần 4](p4_airflow_and_e2e_test/README.md) |
+| **Tuần 2** | **Chuẩn hóa dữ liệu công dân (C360) & Đồng bộ Near Real-time qua Queue** | `p2_c360_standardization/` | **HOÀN THÀNH 100%** | [README Chi Tiết Tuần 2](p2_c360_standardization/README.md) |
+| **Tuần 3** | **Job Đối soát dữ liệu 3 tầng, Dashboard BI & Dịch vụ 4 REST APIs C360** | `p3_reconciliation_bi_api/` | **HOÀN THÀNH 100%** | [README Chi Tiết Tuần 3](p3_reconciliation_bi_api/README.md) |
+| **Tuần 4** | **Lập lịch Apache Airflow, Kịch bản Kiểm thử Toàn trình E2E & Nghiệm thu** | `p4_airflow_and_e2e_test/` | **HOÀN THÀNH 100%** | [README Chi Tiết Tuần 4](p4_airflow_and_e2e_test/README.md) |
 
 ---
 
@@ -111,15 +111,34 @@ hgd_c360_pipeline/
 │   ├── check_week1_status.py           # Script kiểm tra nhanh tình trạng và đối soát Tuần 1
 │   ├── db_env.py                       # Cơ chế chuyển đổi linh hoạt Oracle <-> SQLite
 │   └── debezium/                       # Cấu hình Debezium Source, JDBC Sink & SCN Handoff
-├── p2_c360_standardization/            # TUẦN 2: Bảng Map DBHC, Chuẩn hóa C360 & Queue Near Real-time
-│   └── README.md                       # Kế hoạch & Đặc tả kỹ thuật chi tiết Tuần 2
-├── p3_reconciliation_bi_api/           # TUẦN 3: Job Đối soát 3 tầng, Dashboard BI & 4 REST APIs
-│   └── README.md                       # Kế hoạch & Đặc tả kỹ thuật chi tiết Tuần 3
-└── p4_airflow_and_e2e_test/            # TUẦN 4: Airflow DAGs & Bộ Kiểm thử Toàn trình E2E
-    ├── README.md                       # Kế hoạch & Đặc tả kỹ thuật chi tiết Tuần 4
-    ├── dags/                           # Thư mục chứa các Apache Airflow DAGs
-    └── tests/                          # Test Suite tự động bằng Pytest
-        └── test_week1_p1.py            # Unit & Integration test Tuần 1 (2/2 PASSED)
+├── p2_c360_standardization/            # TUẦN 2: Bảng Map DBHC, Chuẩn hóa C360 & Queue Near Real-time (HOÀN THÀNH 100%)
+│   ├── README.md                       # Báo cáo & Hướng dẫn chi tiết Tuần 2
+│   ├── ddl_c360_schema.sql             # DDL tạo bảng Map, bảng C360, Queue, Control & Log
+│   ├── build_map_dbhc.py               # Xây dựng 2 bảng Map DBHC (36 tỉnh, 3.322 xã) trong 1 Transaction
+│   ├── db_c360_cleaner.py              # Single Source of Truth: Làm sạch Họ tên, Ngày sinh, CCCD, SĐT, 11 cờ DQ_FLAGS
+│   ├── c360_etl_full_load.py           # Job Full Load nạp 48.000 công dân sạch sang C360_THONG_TIN_CA_NHAN
+│   └── c360_nrt_worker.py              # Near Real-time Worker xử lý Queue (MERGE / DELETE qua v_cut)
+├── p3_reconciliation_bi_api/           # TUẦN 3: Job Đối soát 3 tầng, Dashboard BI & 4 REST APIs (HOÀN THÀNH 100%)
+│   ├── README.md                       # Báo cáo & Hướng dẫn chi tiết Tuần 3
+│   ├── reconcile_3_tiers.py            # Job Đối soát dữ liệu 3 tầng (Nguồn <-> Mirror <-> C360, Công thức Vàng diff = 0)
+│   ├── views_bi_datamart.sql           # 3 Data Mart Views: Địa bàn, Chất lượng DQ_FLAGS, Giám sát Đồng bộ NRT
+│   └── api/                            # Dịch vụ FastAPI 4 REST Endpoints (X-API-Key SHA-256, Async Audit Log)
+│       ├── main.py                     # Entrypoint FastAPI với Lifespan quản lý Async Audit Worker
+│       ├── auth.py                     # Middleware xác thực X-API-Key và phân quyền scope
+│       ├── schemas.py                  # Pydantic schemas cho 4 dịch vụ tra cứu & thay đổi
+│       ├── audit.py                    # Worker ghi log bất đồng bộ vào C360_API_AUDIT_LOG
+│       └── routers/citizen.py          # 4 Endpoints: /{ma}, /tra-cuu-lo, /tim-kiem, /thay-doi
+└── p4_airflow_and_e2e_test/            # TUẦN 4: Airflow DAGs & Bộ Kiểm thử Toàn trình E2E (HOÀN THÀNH 100%)
+    ├── README.md                       # Báo cáo & Hướng dẫn chi tiết Tuần 4
+    ├── dags/                           # Bộ 3 DAGs điều phối Apache Airflow
+    │   ├── dag_01_initial_setup_full_load.py       # DAG nạp danh mục, sinh seed, full load Mirror & C360
+    │   ├── dag_02_cdc_near_realtime_monitor.py    # DAG giám sát Debezium & kích hoạt NRT Worker mỗi phút
+    │   └── dag_03_daily_reconciliation_dq.py      # DAG chạy đối soát 3 tầng & snapshot chất lượng hàng ngày
+    └── tests/                          # Test Suite tự động bằng Pytest (9/9 PASSED)
+        ├── test_week1_p1.py            # Unit & Integration test Tuần 1 (2 passed)
+        ├── test_week2_p2.py            # Unit & Integration test Tuần 2: Map DBHC, Cleaners, Full Load & NRT (3 passed)
+        ├── test_week3_api_and_recon.py # Test Đối soát 3 tầng & 4 REST API endpoints (3 passed)
+        └── test_week4_e2e.py           # Kịch bản kiểm thử toàn trình E2E 8 bước khép kín (1 passed)
 ```
 
 ---
@@ -136,32 +155,26 @@ Hệ thống được thiết kế theo nguyên tắc **Dual-Engine** thông min
 
 ---
 
-## 5. Hướng Dẫn Chạy Nhanh (Quick Start)
+## 5. Hướng Dẫn Chạy Nhanh & Nghiệm Thu (Quick Start)
 
 ### 5.1. Cài đặt môi trường
 Yêu cầu Python $\ge 3.10$:
 ```powershell
-# Cài đặt các thư viện cần thiết
-pip install pytest openpyxl
+pip install pytest openpyxl fastapi pydantic uvicorn httpx
 ```
 
-### 5.2. Chạy và kiểm tra nhanh kết quả Tuần 1
+### 5.2. Chạy toàn bộ Test Suite nghiệm thu 4 tuần (9/9 Passed)
 ```powershell
-# 1. Kiểm tra nhanh toàn bộ trạng thái Tuần 1 (Thiết kế, Số dòng, Index, SCN handoff)
-python p1_source_and_mirror/check_week1_status.py
-
-# 2. Chạy bộ kiểm thử tự động Pytest cho Tuần 1
-pytest p4_airflow_and_e2e_test/tests/test_week1_p1.py -v
+pytest p4_airflow_and_e2e_test/tests/ -v
 ```
 
-### 5.3. Quy trình nạp lại dữ liệu từ đầu (Nếu muốn tái tạo DB)
+### 5.3. Khởi chạy Dịch vụ REST API C360 (FastAPI)
 ```powershell
-# Nạp danh mục từ CSV
-python p1_source_and_mirror/load_danhmuc.py
+uvicorn p3_reconciliation_bi_api.api.main:app --host 0.0.0.0 --port 8000 --reload
+# Xem tài liệu API tương tác tại: http://localhost:8000/docs
+```
 
-# Sinh dữ liệu nguồn mẫu (50.000 công dân -> 52.500 dòng)
-python p1_source_and_mirror/gen_seed_nhankhau.py --num-persons 50000 --batch-size 5000
-
-# Chạy Full Load từ Nguồn sang Mirror
-python p1_source_and_mirror/full_load_jdbc.py --batch-size 5000
+### 5.4. Chạy Job Đối Soát Dữ Liệu 3 Tầng
+```powershell
+python p3_reconciliation_bi_api/reconcile_3_tiers.py
 ```

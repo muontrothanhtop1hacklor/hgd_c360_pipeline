@@ -1,0 +1,100 @@
+{
+  "executed_at": "2026-11-13 10:38:20",
+  "elapsed_sec": 10.98,
+  "overall_status": "PASSED",
+  "tier1_source_vs_mirror": {
+    "tables": {
+      "DM_DANTOC": {
+        "source_rows": 59,
+        "mirror_rows": 59,
+        "diff": 0,
+        "status": "PASSED"
+      },
+      "DM_QUOC_TICH": {
+        "source_rows": 243,
+        "mirror_rows": 243,
+        "diff": 0,
+        "status": "PASSED"
+      },
+      "DM_DBHC": {
+        "source_rows": 15325,
+        "mirror_rows": 15325,
+        "diff": 0,
+        "status": "PASSED"
+      },
+      "HO_GD_NHANKHAU": {
+        "source_rows": 52500,
+        "mirror_rows": 52500,
+        "diff": 0,
+        "status": "PASSED"
+      }
+    },
+    "mismatched_provinces": {},
+    "status": "PASSED"
+  },
+  "tier2_mirror_vs_c360": {
+    "mirror_total_rows": 52500,
+    "mirror_valid_distinct_citizens": 48000,
+    "c360_total_citizens": 48000,
+    "c360_distinct_citizens": 48000,
+    "golden_equation_diff": 0,
+    "leaked_invalid_records": 0,
+    "multi_household_sample_test": {
+      "samples_checked": 50,
+      "passed": true,
+      "errors": []
+    },
+    "status": "PASSED"
+  },
+  "tier3_data_quality": {
+    "total_citizens": 48000,
+    "clean_citizens": 38500,
+    "clean_percentage": 80.21,
+    "flag_breakdown": {
+      "TINH_KHONG_MAP": {
+        "count": 1000,
+        "percentage": 2.08
+      },
+      "XA_KHONG_MAP": {
+        "count": 1000,
+        "percentage": 2.08
+      },
+      "XA_MO_HO": {
+        "count": 0,
+        "percentage": 0.0
+      },
+      "TINH_LECH_XA": {
+        "count": 1000,
+        "percentage": 2.08
+      },
+      "NGAY_SINH_LOI": {
+        "count": 1000,
+        "percentage": 2.08
+      },
+      "SDT_LOI": {
+        "count": 1000,
+        "percentage": 2.08
+      },
+      "KHONG_SO_DINH_DANH": {
+        "count": 1500,
+        "percentage": 3.12
+      },
+      "CANH_BAO_CMND9": {
+        "count": 1500,
+        "percentage": 3.12
+      },
+      "DAN_TOC_LOI": {
+        "count": 1000,
+        "percentage": 2.08
+      },
+      "QUOC_TICH_LOI": {
+        "count": 1000,
+        "percentage": 2.08
+      },
+      "HOTEN_THUA_KHOANG_TRANG": {
+        "count": 2500,
+        "percentage": 5.21
+      }
+    }
+  }
+}
