@@ -56,7 +56,7 @@
 | ID module | `DD-C360-ALL` (`DD-BAT-001..006`, `DD-API-001..004`) |
 | Hiện thực cho | `F-C360-001` đến `F-C360-006`, `API-C360-001` đến `API-C360-004`, `SCR-C360-001` đến `SCR-C360-003`, `BAT-C360-001` đến `BAT-C360-006` |
 | Mức chi tiết | A (Đầy đủ mọi sheet: I/O, Thuật toán chi tiết từng bước, SQL định nghĩa 5 kịch bản, Ma trận Validation & DQ Rules, Exception & Log, Unit Test phủ toàn diện) |
-| Tóm tắt xử lý | 1. **Data Generator & Mirror Sync (`p1_source_and_mirror`):** Nạp 3 file CSV danh mục thực tế -> Sinh dữ liệu nhân khẩu ban đầu (Script 1) và biến động (Script 2) -> Đọc song song Full Load theo prefix `MA_CD` (tắt Unique Index khi nạp, bật lại sau nạp) -> Chuyển giao `SCN` sang Debezium Kafka CDC (`upsert`/`delete` theo `(MA_CD, MA_HO_GD)`).<br>2. **C360 Standardization Engine (`p2_c360_standardization`):** Tách phẳng `MA_DBHC_SN` ra 2 bảng Map Tỉnh/Xã bằng `DELETE + INSERT` trong 1 transaction -> Dùng chung duy nhất `VW_C360_TRANSFORM_CORE` để lọc nghiệp vụ, khử trùng theo `MA_CD`, chuẩn hóa 3 địa chỉ/ngày sinh/CCCD/SĐT/dân tộc/quốc tịch và gán `DQ_FLAGS` -> Hỗ trợ cả Full Load (khóa `C360_SYNC_CONTROL`) và Near Real-time mỗi phút qua `C360_SYNC_QUEUE` (`MERGE` + `DELETE`).<br>3. **Reconciliation, BI & REST API (`p3_reconciliation_bi_api`):** Chạy đối soát tự động 3 tầng -> Cung cấp View cho 3 nhóm Dashboard BI -> Cung cấp 4 REST APIs xác thực `X-API-Key` SHA-256 và ghi `Async Batch Audit Log`. |
+| Tóm tắt xử lý | 1. **Data Generator & Mirror Sync (`p1_source_and_mirror`):** Nạp 3 file CSV danh mục thực tế -> Sinh dữ liệu nhân khẩu ban đầu (Script 1) và biến động (Script 2) -> Đọc song song Full Load bằng SARGable Index Range Scan trên `MA_CD` qua Spark JDBC / ThreadPool (chưa tạo Unique Index trước khi nạp, bật lại sau khi nạp xong, có Checkpoint Resume) -> Chuyển giao `SCN` sang Debezium Kafka CDC (`upsert`/`delete` theo `(MA_CD, MA_HO_GD)`).<br>2. **C360 Standardization Engine (`p2_c360_standardization`):** Tách phẳng `MA_DBHC_SN` ra 2 bảng Map Tỉnh/Xã bằng `DELETE + INSERT` trong 1 transaction -> Dùng chung duy nhất `VW_C360_TRANSFORM_CORE` để lọc nghiệp vụ, khử trùng theo `MA_CD`, chuẩn hóa 3 địa chỉ/ngày sinh/CCCD/SĐT/dân tộc/quốc tịch và gán `DQ_FLAGS` -> Hỗ trợ cả Full Load (khóa `C360_SYNC_CONTROL`) và Near Real-time mỗi phút qua `C360_SYNC_QUEUE` (`MERGE` + `DELETE`).<br>3. **Reconciliation, BI & REST API (`p3_reconciliation_bi_api`):** Chạy đối soát tự động 3 tầng -> Cung cấp View cho 3 nhóm Dashboard BI -> Cung cấp 4 REST APIs xác thực `X-API-Key` SHA-256 và ghi `Async Batch Audit Log`. |
 | Lớp / package | - `p1_source_and_mirror`: `load_danhmuc.py`, `gen_seed_nhankhau.py`, `gen_delta_changes.py`, `full_load_jdbc.py`<br>- `p2_c360_standardization`: `c360_engine.py`, `ddl_c360_tables.sql`, `vw_c360_transform_core.sql`, `pkg_c360_sync_engine.sql`<br>- `p3_reconciliation_bi_api`: `reconcile_3_tiers.py`, `bi_datamart_views.sql`, `api/main.py`, `api/auth.py`, `api/audit_worker.py` |
 | Chữ ký phương thức | 1. `load_all_danhmuc(conn, csv_dir, inject_ambiguous_xa=True) -> dict`<br>2. `generate_initial_seed(conn, num_persons=50000, seed=42) -> SeedStats`<br>3. `generate_delta_changes(conn, insert_n=5000, update_n=2000, delete_n=500) -> DeltaStats`<br>4. `run_full_load_mirror(src_conn, dst_conn, num_partitions=8, batch_size=10000) -> LoadResult`<br>5. `refresh_dbhc_map_tables(conn) -> MapStats`<br>6. `run_c360_full_load(conn) -> SyncStats` / `run_c360_nrt_batch(conn, batch_limit=10000) -> SyncStats`<br>7. `lookup_citizen_by_code(ma: str)`, `lookup_citizens_batch(ma_list: list[str])`, `search_citizens(ho_ten: str, ngay_sinh: str)`, `get_changed_citizens(cursor: str | None, limit: int)` |
 | Được gọi bởi | CLI Scripts, Airflow DAGs (`dag_hgd_*`), Debezium Connect, Các hệ thống nội bộ gọi qua HTTP REST API |
@@ -97,7 +97,7 @@
 | **2** | **[BAT-C360-002 & 003] Đồng bộ Full Load & CDC (Nguồn -> Mirror)** | — | — | — | — | Phần 1 - Mục 2 & 3 |
 | 2.1 | Trước khi chạy Full Load: Truy vấn `SELECT CURRENT_SCN FROM V$DATABASE` (hoặc mốc timestamp hiện tại) lưu vào `C360_SYNC_CONTROL.LAST_FULL_LOAD_SCN`. | — | Sang 2.2 | — | — | Mốc chuyển giao sang Debezium CDC |
 | 2.2 | Trên vùng Mirror: Tạm tắt Trigger `TRG_MIR_NHANKHAU_QUEUE` và `DROP` Unique Index `UK_MIR_NK (MA_CD, MA_HO_GD)` trước khi nạp lô lớn; thực hiện `TRUNCATE TABLE` trên 4 bảng Mirror. | — | Sang 2.3 | — | — | Tránh overhead duy trì Index & Trigger từng dòng |
-| 2.3 | Nạp 3 bảng danh mục (`MIR_DM_DANTOC`, `MIR_DM_QUOC_TICH`, `MIR_DM_DBHC`) và chia `num_partitions` luồng đọc song song bảng `VSS_HO_GD_NHANKHAU` theo prefix `SUBSTR(MA_CD, 1, 2)` (hoặc `MOD(ORA_HASH(MA_CD), P)`), ép kiểu tường minh các cột `NUMBER` không có precision/scale, đọc và ghi theo cursor batch `10.000` dòng (không dùng `.cache()` hay `.repartition()`). Chuẩn hóa `MA_HO_GD = NVL(TRIM(MA_HO_GD), 'HO_MAC_DINH')` để đảm bảo khóa `(MA_CD, MA_HO_GD)` không bị `NULL`. | — | Sang 2.4 | Rollback & báo lỗi | SQL-01 | Chống OOM và treo DB nguồn |
+| 2.3 | Nạp 3 bảng danh mục (`MIR_DM_DANTOC`, `MIR_DM_QUOC_TICH`, `MIR_DM_DBHC`) và chia `num_partitions` dải khóa SARGable `WHERE MA_CD >= :lowerBound AND MA_CD < :upperBound` đọc song song qua `spark.read.jdbc(..., predicates=range_predicates)` / `ThreadPoolExecutor` trên `IDX_SRC_NK_MACD_HOGD` (tuyệt đối không bọc hàm quanh `MA_CD` và không `.cache()`/`.repartition()`). Ép kiểu tường minh `CAST(... AS NUMBER(18,0))` cho 10 cột `NUMBER` không có precision của bảng Nhân khẩu và `IS_CAP_XA` của bảng DBHC. Chuẩn hóa `MA_HO_GD = NVL(TRIM(MA_HO_GD), 'HO_MAC_DINH')` và cập nhật trạng thái từng partition vào `MIR_FULL_LOAD_CHECKPOINT` để hỗ trợ chạy tiếp (`resume=True`) nếu lỗi giữa chừng. | — | Sang 2.4 | Lưu trạng thái `FAILED` tại phân vùng lỗi trong `MIR_FULL_LOAD_CHECKPOINT` để Resume | SQL-01 | Chống OOM, tránh Full Table Scan và hỗ trợ Resume |
 | 2.4 | Sau khi nạp xong: Tạo lại `CREATE UNIQUE INDEX UK_MIR_NK ON MIR_HO_GD_NHANKHAU(MA_CD, MA_HO_GD)`, index `IDX_MIR_NK_MOD(MA_CD, MODIFY_DATE DESC)` và bật lại Trigger `TRG_MIR_NHANKHAU_QUEUE`. Kiểm tra `COUNT(*)` giữa Nguồn và Mirror. | `COUNT(Nguồn) == COUNT(Mirror)` | Khởi chạy Debezium CDC từ `LAST_FULL_LOAD_SCN` với chế độ `upsert` theo `(MA_CD, MA_HO_GD)` | Báo lỗi lệch số dòng ngay lập tức | — | Đảm bảo không mất/trùng dữ liệu khi nối CDC |
 | **3** | **[BAT-C360-004] Tiền xử lý & Làm mới Bảng Map Địa bàn hành chính (`TINH` & `XA`)** | — | — | — | — | Phần 2 - Mục 2 |
 | 3.1 | Mở 1 Transaction duy nhất: Thực hiện `DELETE FROM C360_MAP_DBHC_TINH;` và `DELETE FROM C360_MAP_DBHC_XA;` (tuyệt đối không dùng `TRUNCATE`). | — | Sang 3.2 | — | SQL-02 | Luồng NRT đang chạy vẫn đọc được snapshot cũ qua Undo/MVCC |
@@ -236,18 +236,19 @@ SELECT MA_CD,
        TRANG_THAI_QUET,
        TRANG_THAI_XAC_THUC_BCA
   FROM VSS.VSS_HO_GD_NHANKHAU
- WHERE MOD(ORA_HASH(MA_CD), :numPartitions) = :partitionId
+ WHERE MA_CD >= :lowerBound
+   AND MA_CD < :upperBound
 ```
 
 | Thuộc tính | Giá trị |
 |---|---|
-| **Tham số bind** | `:numPartitions` (ví dụ `8`), `:partitionId` (`0..7`) |
-| **Index / Cơ chế đọc** | Đọc song song `N` luồng chia đều theo hàm băm `ORA_HASH(MA_CD)` (hoặc dải prefix `SUBSTR(MA_CD, 1, 2)`), ép kiểu tường minh toàn bộ các cột `NUMBER` không khai báo precision/scale về `NUMBER(18,0)` |
-| **Số dòng kỳ vọng** | `~1/N` tổng số dòng bảng nguồn trên mỗi phân vùng |
-| **Có dữ liệu** | Đọc từng lô `fetchmany(10000)` -> `executemany` ghi thẳng vào `MIR_HO_GD_NHANKHAU` |
-| **Không có (NOT FOUND)** | Phân vùng trống -> Kết thúc luồng phân vùng đó bình thường |
-| **Nhiều hơn kỳ vọng** | Không áp dụng (streaming theo batch cố định, không giữ trong RAM) |
-| **Lỗi DB / Timeout** | Bắt lỗi kết nối, dừng toàn bộ job Full Load và báo lỗi |
+| **Tham số bind** | `:lowerBound`, `:upperBound` (sinh theo dải phân vị trên Covering Index `IDX_SRC_NK_MACD_HOGD`, tương thích mảng `predicates` của `spark.read.jdbc`) |
+| **Index / Cơ chế đọc** | **INDEX RANGE SCAN** trực tiếp trên `IDX_SRC_NK_MACD_HOGD (MA_CD, MA_HO_GD)` (không bọc hàm quanh `MA_CD`), ép kiểu tường minh 10 cột `NUMBER` không khai báo precision/scale về `NUMBER(18,0)` |
+| **Số dòng kỳ vọng** | `~1/N` tổng số dòng bảng nguồn trên mỗi phân vùng; lưu trạng thái `PENDING -> COMPLETED / FAILED` vào `MIR_FULL_LOAD_CHECKPOINT` |
+| **Có dữ liệu** | Đọc streaming qua Spark JDBC `batchsize=10000` hoặc Cursor `fetchmany(10000)` -> ghi thẳng vào `MIR_HO_GD_NHANKHAU` (chưa tạo `UK_MIR_NK` cho tới khi hoàn tất 100% phân vùng) |
+| **Không có (NOT FOUND)** | Phân vùng trống -> Đánh dấu `COMPLETED (0 dòng)` trong `MIR_FULL_LOAD_CHECKPOINT` và kết thúc luồng đó bình thường |
+| **Nhiều hơn kỳ vọng** | Không áp dụng (streaming theo batch cố định, tuyệt đối không gọi `.cache()` / `.persist()` / `.repartition()`) |
+| **Lỗi DB / Timeout** | Đánh dấu phân vùng đang chạy là `FAILED` trong `MIR_FULL_LOAD_CHECKPOINT` để chạy tiếp (`--resume`) mà không cần đọc lại các phân vùng đã `COMPLETED` |
 | **Khóa / Timeout** | Không khóa bảng nguồn; fetch size = `10.000` |
 
 ### SQL-02 – Làm mới 2 Bảng Map Địa bàn hành chính (`C360_MAP_DBHC_TINH` & `C360_MAP_DBHC_XA`) trong 1 Transaction

@@ -141,9 +141,25 @@ CREATE TABLE MIR_HO_GD_NHANKHAU (
     TRANG_THAI_XAC_THUC_BCA  NUMBER(2)
 );
 
--- Câu lệnh đánh Index (được gọi tự động ở cuối Job Full Load sau khi nạp xong dữ liệu):
-CREATE UNIQUE INDEX UK_MIR_NK ON MIR_HO_GD_NHANKHAU (MA_CD, MA_HO_GD);
-CREATE INDEX IDX_MIR_NK_MOD ON MIR_HO_GD_NHANKHAU (MA_CD, MODIFY_DATE DESC, CREATED_DATE DESC, ID DESC);
+-- =============================================================================
+-- POST-FULL-LOAD INDEXES (KHÔNG CHẠY KHI TẠO BẢNG RỖNG TRƯỚC FULL LOAD)
+-- Các Index dưới đây được gọi tự động ở bước cuối của Job full_load_jdbc.py
+-- sau khi đã nạp xong dữ liệu để tránh làm chậm 5-10 lần quá trình Insert lô lớn:
+--
+-- CREATE UNIQUE INDEX UK_MIR_NK ON MIR_HO_GD_NHANKHAU (MA_CD, MA_HO_GD) NOLOGGING PARALLEL 4;
+-- CREATE INDEX IDX_MIR_NK_MOD ON MIR_HO_GD_NHANKHAU (MA_CD, MODIFY_DATE DESC, CREATED_DATE DESC, ID DESC) NOLOGGING PARALLEL 4;
+-- CREATE INDEX IDX_MIR_NK_MATINH ON MIR_HO_GD_NHANKHAU (MA_TINH) NOLOGGING PARALLEL 4;
+-- =============================================================================
+
+-- Trigger BEFORE INSERT OR UPDATE chuẩn hóa MA_HO_GD NULL -> 'HO_MAC_DINH'
+-- để Debezium JDBC Sink MERGE khớp 100% với cột NOT NULL của UK_MIR_NK:
+-- CREATE OR REPLACE TRIGGER TRG_MIR_NK_NORM_HOGD
+-- BEFORE INSERT OR UPDATE ON MIR_HO_GD_NHANKHAU
+-- FOR EACH ROW
+-- BEGIN
+--     :NEW.MA_HO_GD := NVL(TRIM(:NEW.MA_HO_GD), 'HO_MAC_DINH');
+-- END;
+-- /
 
 
 -- 2. Bảng Mirror Danh mục Dân tộc: MIR_DM_DANTOC
@@ -185,4 +201,29 @@ CREATE TABLE MIR_DM_DBHC (
 );
 
 CREATE INDEX IDX_MIR_DBHC_ACTIVE ON MIR_DM_DBHC (TINH_TRANG, IS_CAP_XA, MA_DBHC);
+
+
+-- 5. Bảng lưu mốc SCN bàn giao từ Full Load sang Debezium CDC
+CREATE TABLE MIR_CDC_SCN_HANDOFF (
+    TABLE_NAME        VARCHAR2(100 BYTE) PRIMARY KEY,
+    SNAPSHOT_SCN      NUMBER(20)         NOT NULL,
+    SNAPSHOT_TIME     VARCHAR2(30 BYTE)  NOT NULL,
+    SOURCE_ROW_COUNT  NUMBER(19)         NOT NULL,
+    MIRROR_ROW_COUNT  NUMBER(19)         NOT NULL,
+    STATUS            VARCHAR2(20 BYTE)  NOT NULL
+);
+
+
+-- 6. Bảng lưu trạng thái Checkpoint & Resume theo từng partition khi Full Load
+CREATE TABLE MIR_FULL_LOAD_CHECKPOINT (
+    TABLE_NAME        VARCHAR2(100 BYTE) NOT NULL,
+    PARTITION_ID      VARCHAR2(30 BYTE)  NOT NULL,
+    LOWER_BOUND       VARCHAR2(50 BYTE),
+    UPPER_BOUND       VARCHAR2(50 BYTE),
+    ROWS_LOADED       NUMBER(19)         DEFAULT 0 NOT NULL,
+    STATUS            VARCHAR2(20 BYTE)  NOT NULL,
+    UPDATED_AT        VARCHAR2(30 BYTE)  NOT NULL,
+    CONSTRAINT PK_MIR_FL_CHECKPOINT PRIMARY KEY (TABLE_NAME, PARTITION_ID)
+);
+
 

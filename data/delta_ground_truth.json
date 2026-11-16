@@ -1,30 +1,30 @@
 {
-  "executed_at": "2026-11-10 15:26:49",
+  "executed_at": "2026-11-16 17:17:59",
   "inserted_new_citizens": [
     {
       "MA_CD": "9900000001",
       "MA_HO_GD": "HGD_NEW_0001",
-      "ID": 5251
+      "ID": 52501
     },
     {
       "MA_CD": "9900000002",
       "MA_HO_GD": "HGD_NEW_0002",
-      "ID": 5252
+      "ID": 52502
     },
     {
       "MA_CD": "9900000003",
       "MA_HO_GD": "HGD_NEW_0003",
-      "ID": 5253
+      "ID": 52503
     },
     {
       "MA_CD": "9900000004",
       "MA_HO_GD": "HGD_NEW_0004",
-      "ID": 5254
+      "ID": 52504
     },
     {
       "MA_CD": "9900000005",
       "MA_HO_GD": "HGD_NEW_0005",
-      "ID": 5255
+      "ID": 52505
     }
   ],
   "inserted_new_household_for_existing": [
@@ -32,7 +32,7 @@
       "MA_CD": "0000000004",
       "OLD_MA_HO_GD": "HGD000000004_1",
       "NEW_MA_HO_GD": "HGD_DELTA_NEW_0000000004",
-      "NEW_ID": 5256,
+      "NEW_ID": 52506,
       "EXPECTED_MA_TINH_THUONG_TRU": "79",
       "EXPECTED_MA_XA_THUONG_TRU": "26734"
     },
@@ -40,7 +40,7 @@
       "MA_CD": "0000000005",
       "OLD_MA_HO_GD": "HGD000000005_1",
       "NEW_MA_HO_GD": "HGD_DELTA_NEW_0000000005",
-      "NEW_ID": 5257,
+      "NEW_ID": 52507,
       "EXPECTED_MA_TINH_THUONG_TRU": "79",
       "EXPECTED_MA_XA_THUONG_TRU": "26734"
     },
@@ -48,7 +48,7 @@
       "MA_CD": "0000000006",
       "OLD_MA_HO_GD": "HGD000000006_1",
       "NEW_MA_HO_GD": "HGD_DELTA_NEW_0000000006",
-      "NEW_ID": 5258,
+      "NEW_ID": 52508,
       "EXPECTED_MA_TINH_THUONG_TRU": "79",
       "EXPECTED_MA_XA_THUONG_TRU": "26734"
     }
@@ -67,6 +67,12 @@
       "EXPECTED_DQ_FLAGS": null
     },
     {
+      "ID": 42,
+      "MA_CD": "0000000040",
+      "MA_HO_GD": "HGD000000040_1",
+      "EXPECTED_DQ_FLAGS": null
+    },
+    {
       "ID": 137,
       "MA_CD": "0000000130",
       "MA_HO_GD": "HGD000000130_1",
@@ -77,12 +83,6 @@
       "MA_CD": "0000000131",
       "MA_HO_GD": "HGD000000131_1",
       "EXPECTED_DQ_FLAGS": null
-    },
-    {
-      "ID": 242,
-      "MA_CD": "0000000230",
-      "MA_HO_GD": "HGD000000230_1",
-      "EXPECTED_DQ_FLAGS": null
     }
   ],
   "updated_status_to_filtered_out": [
@@ -90,25 +90,25 @@
       "ID": 22,
       "MA_CD": "0000000021",
       "MA_HO_GD": "HGD000000021_1",
-      "REASON": "TRANG_THAI_DUYET=0"
+      "REASON": "TRANG_THAI_DUYET=4"
     },
     {
       "ID": 23,
       "MA_CD": "0000000022",
       "MA_HO_GD": "HGD000000022_1",
-      "REASON": "TYPEID='D'"
+      "REASON": "TYPEID='GG'"
     },
     {
       "ID": 24,
       "MA_CD": "0000000023",
       "MA_HO_GD": "HGD000000023_1",
-      "REASON": "TRANG_THAI_DUYET=0"
+      "REASON": "TRANG_THAI_DUYET=3"
     },
     {
       "ID": 25,
       "MA_CD": "0000000024",
       "MA_HO_GD": "HGD000000024_1",
-      "REASON": "TYPEID='D'"
+      "REASON": "TYPEID='GT'"
     }
   ],
   "updated_status_to_deceased": [
@@ -157,7 +157,7 @@
     },
     {
       "MA_CD": "0000000004",
-      "DELETED_ID": 5256,
+      "DELETED_ID": 52506,
       "DELETED_MA_HO_GD": "HGD_DELTA_NEW_0000000004",
       "FALLBACK_ID": 5,
       "FALLBACK_MA_HO_GD": "HGD000000004_1",
@@ -166,7 +166,7 @@
     },
     {
       "MA_CD": "0000000005",
-      "DELETED_ID": 5257,
+      "DELETED_ID": 52507,
       "DELETED_MA_HO_GD": "HGD_DELTA_NEW_0000000005",
       "FALLBACK_ID": 6,
       "FALLBACK_MA_HO_GD": "HGD000000005_1",

@@ -31,7 +31,7 @@ NHANKHAU_COLUMNS = [
     ("HO_TEN", "TEXT"),
     ("SO_SO_BHXH", "TEXT"),
     ("GIOI_TINH", "INTEGER"),
-    ("NGAY_SINH", "TEXT"),
+    ("NGAY_SINH", "INTEGER"),
     ("QUOC_TICH", "TEXT"),
     ("DM_DAN_TOC_ID", "INTEGER"),
     ("SO_CMTND", "TEXT"),
@@ -162,6 +162,7 @@ def get_connection(
     db_file = Path(sqlite_path) if sqlite_path else Path(os.environ.get("SQLITE_DB_PATH", DEFAULT_SQLITE_PATH))
     db_file.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_file), timeout=60.0)
+    conn.execute("PRAGMA busy_timeout=60000;")
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA temp_store=MEMORY;")
@@ -183,6 +184,7 @@ def init_source_and_mirror_schema(conn: Any, engine: str = "LOCAL_SQLITE") -> No
             f"""
             CREATE TABLE IF NOT EXISTS {prefix}DM_DANTOC (
                 ID INTEGER PRIMARY KEY,
+                CAN_CU TEXT,
                 MA TEXT,
                 TEN TEXT NOT NULL,
                 TEN_GOI_KHAC TEXT,
@@ -202,6 +204,10 @@ def init_source_and_mirror_schema(conn: Any, engine: str = "LOCAL_SQLITE") -> No
             );
             """
         )
+        # Bổ sung cột CAN_CU nếu DB cũ chưa có
+        existing_dt_cols = {r[1] for r in cur.execute(f"PRAGMA table_info({prefix}DM_DANTOC)").fetchall()}
+        if "CAN_CU" not in existing_dt_cols:
+            cur.execute(f"ALTER TABLE {prefix}DM_DANTOC ADD COLUMN CAN_CU TEXT;")
 
         # 2. Bảng Danh mục Nguồn & Mirror: DM_QUOC_TICH
         cur.execute(
@@ -271,11 +277,10 @@ def init_source_and_mirror_schema(conn: Any, engine: str = "LOCAL_SQLITE") -> No
         """
     )
 
-    # Indexes trên Nguồn & Mirror
+    # Indexes trên Nguồn (Mirror chưa đánh Index lúc tạo bảng rỗng để tối ưu tốc độ Full Load;
+    # Unique Index UK_MIR_NK chỉ được tạo sau bước Full Load qua ensure_mirror_indexes)
     cur.execute("CREATE INDEX IF NOT EXISTS IDX_VSS_NK_MACD ON VSS_HO_GD_NHANKHAU (MA_CD);")
     cur.execute("CREATE INDEX IF NOT EXISTS IDX_VSS_NK_MATINH ON VSS_HO_GD_NHANKHAU (MA_TINH);")
-    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS UK_MIR_NK ON MIR_VSS_HO_GD_NHANKHAU (MA_CD, MA_HO_GD);")
-    cur.execute("CREATE INDEX IF NOT EXISTS IDX_MIR_NK_MATINH ON MIR_VSS_HO_GD_NHANKHAU (MA_TINH);")
 
     # 5. Bảng lưu trạng thái SCN / Watermark bàn giao giữa Full Load và CDC
     cur.execute(
@@ -291,4 +296,35 @@ def init_source_and_mirror_schema(conn: Any, engine: str = "LOCAL_SQLITE") -> No
         """
     )
 
+    # 6. Bảng lưu Checkpoint theo từng partition khi chạy Full Load (hỗ trợ Resume khi lỗi)
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS MIR_FULL_LOAD_CHECKPOINT (
+            TABLE_NAME TEXT NOT NULL,
+            PARTITION_ID TEXT NOT NULL,
+            LOWER_BOUND TEXT,
+            UPPER_BOUND TEXT,
+            ROWS_LOADED INTEGER DEFAULT 0,
+            STATUS TEXT NOT NULL,
+            UPDATED_AT TEXT NOT NULL,
+            PRIMARY KEY (TABLE_NAME, PARTITION_ID)
+        );
+        """
+    )
+
     conn.commit()
+
+
+def ensure_mirror_indexes(conn: Any, engine: str = "LOCAL_SQLITE") -> None:
+    """Tạo Unique Index UK_MIR_NK và các Index phụ trợ trên Mirror sau khi Full Load xong."""
+    if engine == "ORACLE":
+        return
+    cur = conn.cursor()
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS UK_MIR_NK ON MIR_VSS_HO_GD_NHANKHAU (MA_CD, MA_HO_GD);")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS IDX_MIR_NK_MOD "
+        "ON MIR_VSS_HO_GD_NHANKHAU (MA_CD, NGAY_SUA DESC, NGAY_TAO DESC, ID DESC);"
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS IDX_MIR_NK_MATINH ON MIR_VSS_HO_GD_NHANKHAU (MA_TINH);")
+    conn.commit()
+

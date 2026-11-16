@@ -59,16 +59,24 @@ def load_dm_dantoc(conn: Any, csv_path: Path) -> int:
     with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         for r in reader:
+            ngay_het_hl = to_str(r.get("NGAY_HET_HL"))
+            raw_trang_thai = to_int(r.get("TRANG_THAI"))
+            if raw_trang_thai is not None:
+                trang_thai = raw_trang_thai
+            else:
+                trang_thai = 1 if (not ngay_het_hl or ngay_het_hl >= "2026-01-01") else 0
+
             rows.append(
                 (
                     to_int(r.get("ID")),
+                    to_str(r.get("CAN_CU")),
                     to_str(r.get("MA")),
                     to_str(r.get("TEN")) or "Chưa rõ",
                     to_str(r.get("TEN_GOI_KHAC")),
                     to_str(r.get("DIA_BAN_CU_TRU")),
                     to_str(r.get("NGAY_HL")),
-                    to_str(r.get("NGAY_HET_HL")),
-                    to_int(r.get("TRANG_THAI")),
+                    ngay_het_hl,
+                    trang_thai,
                     to_int(r.get("NGUOI_TAO")),
                     to_str(r.get("NGAY_TAO")),
                     to_int(r.get("NGUOI_SUA")),
@@ -83,10 +91,10 @@ def load_dm_dantoc(conn: Any, csv_path: Path) -> int:
     cur.executemany(
         """
         INSERT INTO VSS_DM_DANTOC (
-            ID, MA, TEN, TEN_GOI_KHAC, DIA_BAN_CU_TRU,
+            ID, CAN_CU, MA, TEN, TEN_GOI_KHAC, DIA_BAN_CU_TRU,
             NGAY_HL, NGAY_HET_HL, TRANG_THAI, NGUOI_TAO, NGAY_TAO,
             NGUOI_SUA, NGAY_SUA, DAN_SO, MA_CU, CAP, CHA_ID
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         rows,
     )
@@ -141,9 +149,9 @@ def load_dm_dbhc(conn: Any, csv_path: Path, inject_moho: bool = True) -> int:
             if inject_moho and tinh_trang == "1" and is_cap_xa == 1 and ngay_het_hl and ngay_het_hl.startswith("2099-12-31"):
                 if ma_dbhc == "00004" and ma_cha == "01":
                     ma_dbhc_sn = f"{ma_dbhc_sn};00999;00998" if ma_dbhc_sn else "00999;00998"
-                elif ma_dbhc == "00007" and ma_cha == "01":
+                elif ma_dbhc == "00008" and ma_cha == "01":
                     ma_dbhc_sn = f"{ma_dbhc_sn};00999" if ma_dbhc_sn else "00999"
-                elif ma_dbhc == "11956" and ma_cha == "33":
+                elif ma_dbhc == "11953" and ma_cha == "33":
                     ma_dbhc_sn = f"{ma_dbhc_sn};00998" if ma_dbhc_sn else "00998"
 
             rows.append(

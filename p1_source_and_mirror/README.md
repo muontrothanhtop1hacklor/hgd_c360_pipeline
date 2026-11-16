@@ -12,7 +12,7 @@ Tuần 1 tập trung xây dựng nền tảng vững chắc cho toàn bộ hệ 
 1. **Khảo sát dữ liệu thực tế & Chốt tài liệu thiết kế:** Phân tích 3 file CSV danh mục thực tế (Dân tộc, Quốc tịch, Địa bàn hành chính 2025 sau sáp nhập), hoàn thiện bộ tài liệu Thiết kế cơ bản (15 sheets) và Thiết kế chi tiết (11 sheets) kèm Sheet `QA` giải trình kỹ thuật.
 2. **Khởi tạo Schema & Nạp Danh mục (`load_danhmuc.py`):** Nạp đầy đủ 3 bảng danh mục nguồn `VSS_DM_*`, hỗ trợ cơ chế tiêm có kiểm soát dữ liệu mơ hồ (`MO_HO`) để kiểm thử.
 3. **Sinh dữ liệu nguồn ban đầu - Initial Seed Generator (`gen_seed_nhankhau.py`):** Sinh giả lập 50.000 công dân (~52.500 dòng nhân khẩu `VSS_HO_GD_NHANKHAU`) bao phủ 100% các kịch bản sạch, bẩn và biên.
-4. **Đồng bộ toàn lượng Full Load JDBC (`full_load_jdbc.py`):** Đồng bộ 4 bảng từ Nguồn sang vùng Mirror (`MIR_VSS_*`) với phân đoạn song song theo tiền tố `MA_CD`, ép kiểu tường minh, quản lý Unique Index và ghi nhận mốc SCN bàn giao CDC.
+4. **Đồng bộ toàn lượng Full Load JDBC (`full_load_jdbc.py`):** Đồng bộ 4 bảng từ Nguồn sang vùng Mirror (`MIR_VSS_*`) bằng phân vùng SARGable Index Range Scan trên `MA_CD` (hỗ trợ PySpark JDBC & đa luồng `ThreadPoolExecutor`), ép kiểu tường minh 11 cột `NUMBER`, lưu Checkpoint (`MIR_FULL_LOAD_CHECKPOINT`) hỗ trợ `--resume`, dựng Unique Index sau khi nạp xong và ghi nhận mốc SCN bàn giao CDC.
 5. **Giả lập biến động Delta Changes & Cấu hình Debezium CDC (`gen_delta_changes.py` & `debezium/`):** Tạo đủ các kịch bản `INSERT`, `UPDATE`, đổi `MA_CD`, `DELETE` và chuẩn hóa cấu hình Debezium Source/Sink.
 
 ---
@@ -67,7 +67,7 @@ Sinh bộ dữ liệu chuẩn mẫu **50.000 công dân** (`num_persons_total`),
 | **Trùng công dân ở nhiều hộ** | **2.500** | 1 `MA_CD` xuất hiện ở 2 hộ khác nhau với `MODIFY_DATE` khác nhau |
 | **Trùng ngày giờ sửa (Hòa ID)** | **500** | `MODIFY_DATE` và `CREATED_DATE` bằng nhau, kiểm thử tie-breaker bằng `ID` |
 | **Hồ sơ bị loại trừ bởi TYPEID** | **1.000** | Thuộc diện giảm: `'GT'` (tử), `'GM'` (mất tích), `'GG'` (gộp), `'GK'` (khác) |
-| **Hồ sơ chưa duyệt / Từ chối / Hủy** | **1.000** | `TRANG_THAI_DUYET IN (1, 3, 4)` để kiểm tra bộ lọc không đẩy lên C360 |
+| **Hồ sơ chưa duyệt / Từ chối / Hủy** | **1.000** | `TRANG_THAI_DUYET IN (1, 3, 4)` để kiểm tra bộ lọc không đẩy lên C360 (hợp lệ: `0, 2, NULL`) |
 | **Mã Tỉnh dạng `NNTTT`** | **2.500** | Mã tỉnh có đuôi `'TTT'` (ví dụ `'01TTT'`, `'33TTT'`, `'79TTT'`) |
 | **Mã Xã sáp nhập 1 - 1** | **4.000** | Mã xã cũ nằm trong `MA_DBHC_SN` của duy nhất 1 xã mới |
 | **Mã Xã mơ hồ cùng Tỉnh (`00999`)** | **500** | Xã cũ bị tách sang 2 xã mới cùng Tỉnh Hà Nội (giữ tỉnh, xã = NULL) |
@@ -75,40 +75,42 @@ Sinh bộ dữ liệu chuẩn mẫu **50.000 công dân** (`num_persons_total`),
 | **Tỉnh lệch Xã** | **1.000** | Xã thuộc Tỉnh A nhưng cột `MA_TINH` khai báo Tỉnh B (ưu tiên suy từ Xã) |
 | **Suy diễn Tỉnh từ Xã** | **1.000** | Dòng bị khuyết/sai `MA_TINH` nhưng `MA_XA` đúng, tự động suy ra Tỉnh |
 | **Địa chỉ sai / không map được** | **1.000** | Mã xã `'99999'`, mã tỉnh `'99TTT'` không tồn tại trong danh mục |
-| **Ngày sinh chuẩn `YYYYMMDD`** | **43.500** | Ngày sinh 8 chữ số đúng lịch thiên văn |
-| **Ngày sinh dạng chuỗi ngày `/` hoặc `-`** | **2.500** | Lưu dạng `'DD/MM/YYYY'` hoặc `'YYYY-MM-DD'` |
+| **Ngày sinh chuẩn `YYYYMMDD` (NUMBER)** | **43.500** | Ngày sinh 8 chữ số nguyên đúng lịch thiên văn |
+| **Ngày sinh dạng `YYYYMM00` / `YYYYMM`** | **2.500** | Dạng số thiếu ngày sinh (6 số hoặc có `00` ở cuối) |
 | **Chỉ có năm sinh (`YYYY0000` / 4 số)** | **1.000** | Chuẩn hóa về chuỗi 4 ký tự `YYYY` |
-| **Ngày sinh sai lịch / Ngoài khoảng** | **500** | Ngày 30/02 (`19950230`) hoặc năm sinh bất thường (< 1850) |
+| **Ngày sinh sai lịch / Ngoài khoảng** | **500** | Số nguyên `19950230` (30/02) hoặc `17500101` (< 1850) — không lẫn text để `CAST` chuẩn xác |
 | **CCCD đủ 12 chữ số hợp lệ** | **45.500** | Đúng format 12 ký tự số |
 | **CCCD lấy từ cột `SO_CMTND` 12 số** | **1.000** | Cột `SO_CCCD` trống nhưng `SO_CMTND` lưu đủ 12 số |
 | **Chỉ có CMND 9 chữ số** | **1.000** | Cảnh báo thiếu số định danh cá nhân (`CANH_BAO_CMND9`) |
 | **Số điện thoại chuẩn / Quốc tế / Lỗi** | **48.000** | Bao gồm: chuẩn đầu 0, đầu `+84` / `84`, số sai < 9 chữ số |
-| **Dân tộc hết hạn (`ID=248`) / Sai** | **1.000** | Kiểm tra join danh mục theo thời gian hiệu lực |
+| **Dân tộc (58 mã CSV) / Hết hạn (`248`) / Sai** | **1.000** | Phân bổ đều theo 58 ID hiệu lực từ CSV `DM_DAN_TOC`, kèm `248` hết hạn và `9999` sai |
 | **Quốc tịch dạng ID / Mã / Sai** | **2.000** | Hỗ trợ nguồn lưu `'VN'`, lưu ID `'233'` hoặc chuỗi sai `'XX'` |
 | **Họ tên thừa khoảng trắng** | **2.500** | Khoảng trắng đầu/giữa/cuối chuỗi để kiểm tra trim & upper |
 
 ### 3.3. Job Nạp toàn bộ Full Load JDBC (`full_load_jdbc.py`)
-- **Phân mảnh đọc song song (10 Partitions):** Cột `MA_CD` là chuỗi, chia 10 dải theo ký tự đầu (`MA_CD LIKE '0%'` .. `MA_CD LIKE '9%'`), tận dụng chỉ mục `IDX_VSS_NK_MACD`.
-- **Ép kiểu tường minh (`CAST`):** Chống lỗi Spark/SQLite suy diễn `NUMBER` thành `Decimal(38,10)` gây tràn bộ nhớ.
-- **Không dùng `.cache()` / `.persist()` toàn tập:** Truyền stream trực tiếp theo từng batch (`batch_size = 5000`) nhằm bảo vệ RAM dưới 300MB.
-- **Chiến lược Unique Index:** Tự động Drop/Disable `UK_MIR_NK (MA_CD, MA_HO_GD)` trên Mirror trước khi nạp và Rebuild lại sau khi nạp xong.
-- **Bàn giao SCN cho Debezium CDC (`MIR_CDC_SCN_HANDOFF`):** Chốt mốc SCN `1794466529406500` ngay tại thời điểm snapshot.
+- **Phân vùng đọc song song SARGable Index Range Scan (10 Partitions):** Tự động chia dải khóa liên tiếp `[lower_bound, upper_bound)` dựa trên Covering Index `IDX_VSS_NK_MACD` (`WHERE MA_CD >= ? AND MA_CD < ?`), tuyệt đối **không bọc hàm** quanh `MA_CD` gây quét toàn bảng (`Full Table Scan`).
+- **Hỗ trợ PySpark JDBC & Đa luồng DB-API:** Hỗ trợ chạy phân tán qua `spark.read.jdbc(..., predicates=range_predicates)` (`--use-spark`) hoặc đa luồng `ThreadPoolExecutor` khi chạy DB-API cục bộ.
+- **Ép kiểu tường minh (`CAST`) 11 cột `NUMBER` không khai báo precision:** `NGAY_SINH`, `NGAY_KS`, `NGAY_CAP_CMTND`, `NGAY_CAP_HC`, `DEAD_DATE`, `NGAY_BATDAU`, `NGAY_HETHAN`, `NGAY_PHATSINH`, `NGAY_SINH_BK`, `LOCK_DATA` (Nhân khẩu) và `IS_CAP_XA` (DBHC); đồng thời chuẩn hóa `MA_HO_GD` rỗng/`NULL` thành `'HO_MAC_DINH'`.
+- **Không dùng `.cache()` / `.persist()` / `.repartition()`:** Truyền stream trực tiếp theo từng batch nhằm bảo vệ RAM dưới 300MB.
+- **Checkpoint & Resume (`MIR_FULL_LOAD_CHECKPOINT`):** Lưu trạng thái từng partition (`PENDING -> IN_PROGRESS -> COMPLETED / FAILED`), cho phép chạy tiếp (`--resume`) từ phân vùng lỗi mà không phải nạp lại các phần đã xong.
+- **Chiến lược Unique Index sau khi nạp:** Bảng Mirror khi khởi tạo rỗng (`ddl_mirror.sql` / `db_env.py`) **không tạo sẵn** `UK_MIR_NK` để tránh làm chậm Insert lô lớn; chỉ tạo lại qua `ensure_mirror_indexes()` sau khi 100% phân vùng hoàn tất.
+- **Bàn giao SCN cho Debezium CDC (`MIR_CDC_SCN_HANDOFF`):** Chốt mốc SCN `1794824305938500` trước khi đọc dữ liệu để nối tiếp CDC không mất/trùng sự kiện.
 - **Báo cáo đối soát Full Load:** Xuất ra [`data/full_load_mirror_report.json`](../data/full_load_mirror_report.json):
   - `VSS_HO_GD_NHANKHAU`: **52.500** = `MIR_VSS_HO_GD_NHANKHAU`: **52.500** (Lệch: **0**, Status: `PASSED`).
-  - Phân bổ 10 partition: `part_0`: 6.000, `part_1`: 5.000, `part_2`: 5.000, `part_3`: 5.500, `part_4`: 5.000, `part_5`: 6.000, `part_6`: 5.000, `part_7`: 5.000, `part_8`: 5.000, `part_9`: 5.000.
+  - Phân bổ cân bằng 10 dải `MA_CD`: mỗi partition (`part_0`..`part_9`) đạt chính xác **5.250 dòng**.
 
 ### 3.4. Script 2 – Giả lập biến động Delta Changes (`gen_delta_changes.py`)
 Mô phỏng đầy đủ mọi tình huống biến động phát sinh trực tiếp tại nguồn, xuất ra [`data/delta_ground_truth.json`](../data/delta_ground_truth.json):
 1. **`INSERT` nhân khẩu mới:** Thêm 5 công dân mới (`9900000001` .. `9900000005`).
 2. **`INSERT` hộ mới cho công dân cũ:** Thêm hộ mới với `MODIFY_DATE` mới hơn cho công dân đã có (`0000000004` .. `0000000008`).
 3. **`UPDATE` thông tin sạch lên bẩn & bẩn về sạch:** Sửa CCCD, sửa địa chỉ, sửa ngày sinh để kiểm tra việc gán/gỡ cờ `DQ_FLAGS`.
-4. **`UPDATE` loại trừ & phục hồi:** Đổi `TYPEID = 'GG'` hoặc `TRANG_THAI_DUYET = 4` để loại khỏi C360, và duyệt hồ sơ `1 -> 2` để đưa vào C360.
+4. **`UPDATE` loại trừ & chuyển trạng thái:** Đổi `TYPEID` sang `'GG'` / `'GT'` hoặc chuyển `TRANG_THAI_DUYET` sang `1` / `3` / `4` để loại khỏi C360; cập nhật `TINH_TRANG_SONG = 0` khi công dân mất.
 5. **`UPDATE` đổi mã công dân (`MA_CD`):** Đổi `MA_CD` mới đồng thời lưu `MA_CD_OLD` để kiểm tra việc xóa mã cũ và thêm mã mới trên C360.
 6. **`DELETE` dòng nhân khẩu:** Xóa 1 hộ trong số nhiều hộ và xóa toàn bộ các dòng của một công dân.
 
 ### 3.5. Cấu hình Debezium CDC (`debezium/`)
 - `oracle-source-connector.json`: Cấu hình Debezium đọc Oracle LogMiner, tự động gắn `log.mining.scn.start` từ bảng `MIR_CDC_SCN_HANDOFF`.
-- `jdbc-sink-connector.json`: Cấu hình Kafka JDBC Sink ghi vào bảng Mirror với `insert.mode = upsert`, `delete.enabled = true`, khóa bản ghi `pk.fields = MA_CD, MA_HO_GD`.
+- `jdbc-sink-connector.json`: Cấu hình Kafka JDBC Sink ghi vào bảng Mirror với `insert.mode = upsert`, `delete.enabled = true`, khóa bản ghi `primary.key.fields = MA_CD,MA_HO_GD`, kết hợp SMT (`transforms`) chuẩn hóa `MA_HO_GD` rỗng/`NULL` thành `'HO_MAC_DINH'` trước khi `MERGE` (đồng bộ với Trigger `BEFORE INSERT OR UPDATE` trên Mirror).
 - `register_connectors.py`: Script tự động lấy SCN từ DB và đăng ký cấu hình lên Kafka Connect REST API (`POST /connectors`).
 
 ---
@@ -124,8 +126,8 @@ python p1_source_and_mirror/load_danhmuc.py
 # Bước 2: Sinh dữ liệu giả lập ban đầu (50.000 công dân, 52.500 dòng nhân khẩu)
 python p1_source_and_mirror/gen_seed_nhankhau.py --num-persons 50000 --batch-size 5000
 
-# Bước 3: Thực hiện Full Load JDBC từ Nguồn sang vùng Mirror
-python p1_source_and_mirror/full_load_jdbc.py --batch-size 5000
+# Bước 3: Thực hiện Full Load JDBC từ Nguồn sang vùng Mirror (hỗ trợ --resume / --use-spark)
+python p1_source_and_mirror/full_load_jdbc.py --partitions 10 --workers 4
 
 # Bước 4: Kiểm tra nhanh trạng thái và đối soát số liệu Tuần 1
 python p1_source_and_mirror/check_week1_status.py
@@ -149,10 +151,10 @@ Kết quả thực tế từ script `check_week1_status.py`:
 ==============================================================================
 
 [1] TÀI LIỆU THIẾT KẾ (design/):
-  - ThietKeCoBan_BasicDesign_HGD_C360.md          : OK (52,047 bytes)
-  - ThietKeCoBan_BasicDesign_HGD_C360.xlsx        : OK (43,923 bytes)
-  - ThietKeChiTiet_DetailDesign_HGD_C360.md       : OK (50,587 bytes)
-  - ThietKeChiTiet_DetailDesign_HGD_C360.xlsx     : OK (38,188 bytes)
+  - ThietKeCoBan_BasicDesign_HGD_C360.md          : OK (52,752 bytes)
+  - ThietKeCoBan_BasicDesign_HGD_C360.xlsx        : OK (44,324 bytes)
+  - ThietKeChiTiet_DetailDesign_HGD_C360.md       : OK (51,524 bytes)
+  - ThietKeChiTiet_DetailDesign_HGD_C360.xlsx     : OK (38,661 bytes)
 
 [2] SỐ LƯỢNG BẢN GHI CÁC BẢNG NGUỒN (VSS_*) & MIRROR (MIR_VSS_*):
   - VSS_DM_DANTOC                :         59 dòng
@@ -166,14 +168,14 @@ Kết quả thực tế từ script `check_week1_status.py`:
 
 [3] CHỈ MỤC MIRROR & MỐC SCN BÀN GIAO DEBEZIUM CDC:
   - Unique Index UK_MIR_NK (MA_CD, MA_HO_GD) : ACTIVE (UNIQUE)
-  - Mốc SCN bàn giao (SNAPSHOT_SCN)          : 1794466529406500 (Status: PASSED)
+  - Mốc SCN bàn giao (SNAPSHOT_SCN)          : 1794824305938500 (Time: 2026-11-16 17:18:25, Nguồn: 52,500, Mirror: 52,500, Status: PASSED)
 
 [4] PHÂN BỔ ĐỌC SONG SONG THEO PHÂN VÙNG MA_CD (10 PARTITIONS):
-  - part_0 :    6,000 dòng     - part_5 :    6,000 dòng
-  - part_1 :    5,000 dòng     - part_6 :    5,000 dòng
-  - part_2 :    5,000 dòng     - part_7 :    5,000 dòng
-  - part_3 :    5,500 dòng     - part_8 :    5,000 dòng
-  - part_4 :    5,000 dòng     - part_9 :    5,000 dòng
+  - part_0       :    5,250 dòng     - part_5       :    5,250 dòng
+  - part_1       :    5,250 dòng     - part_6       :    5,250 dòng
+  - part_2       :    5,250 dòng     - part_7       :    5,250 dòng
+  - part_3       :    5,250 dòng     - part_8       :    5,250 dòng
+  - part_4       :    5,250 dòng     - part_9       :    5,250 dòng
 ==============================================================================
 ```
 

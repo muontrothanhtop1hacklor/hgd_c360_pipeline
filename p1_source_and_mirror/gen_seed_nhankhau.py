@@ -96,18 +96,22 @@ def fetch_reference_pools(conn: Any) -> Dict[str, Any]:
 
     merged_wards_1to1 = [(old_xa, targets[0][0], targets[0][1]) for old_xa, targets in sn_counts.items() if len(targets) == 1]
 
-    # 3. Dân tộc đang hiệu lực
+    # 3. Dân tộc đang hiệu lực trực tiếp từ bảng VSS_DM_DANTOC theo NGAY_HET_HL
     cur.execute(
         """
         SELECT ID, MA, TEN
         FROM VSS_DM_DANTOC
-        WHERE TRANG_THAI = 1 AND (NGAY_HET_HL IS NULL OR NGAY_HET_HL = '')
+        WHERE NGAY_HET_HL IS NULL
+           OR TRIM(NGAY_HET_HL) = ''
+           OR NGAY_HET_HL >= '2026-01-01'
         ORDER BY ID
         """
     )
     valid_dantoc = [r[0] for r in cur.fetchall()]
     if not valid_dantoc:
-        valid_dantoc = [171, 172, 173, 174]
+        raise RuntimeError(
+            "Danh mục VSS_DM_DANTOC trống hoặc không có bản ghi hiệu lực. Hãy chạy load_danhmuc.py trước!"
+        )
 
     return {
         "active_provinces": active_provinces,
@@ -150,6 +154,8 @@ def generate_seed_dataset(
         "num_persons_total": num_persons,
         "num_rows_total": 0,
         "expected_valid_c360_persons": 0,
+        "valid_dantoc_pool_size": len(valid_dantoc),
+        "filtered_out_persons_typeid_g": 0,
         "filtered_out_persons_typeid_d": 0,
         "filtered_out_persons_unapproved": 0,
         "multi_household_persons": 0,
@@ -164,7 +170,7 @@ def generate_seed_dataset(
         "addr_infer_tinh_from_xa": 0,
         "addr_invalid_unmapped": 0,
         "dob_standard_yyyymmdd": 0,
-        "dob_slash_or_dash": 0,
+        "dob_year_month": 0,
         "dob_year_only": 0,
         "dob_from_ngay_sinh_dt": 0,
         "dob_invalid": 0,
@@ -201,14 +207,15 @@ def generate_seed_dataset(
         ho_ten_kd = remove_accents(f"{ho} {dem} {ten}")
         ten_kd = remove_accents(ten)
 
-        # Phân bổ kịch bản lọc nghiệp vụ (TYPEID & TRANG_THAI_DUYET)
-        # - p_idx % 50 == 1 (2%): TYPEID = 'D' -> bị loại hoàn toàn
-        # - p_idx % 50 == 2 (2%): TRANG_THAI_DUYET = 0 -> bị loại hoàn toàn
-        # - Còn lại 96%: Công dân hợp lệ đưa vào C360
-        is_typeid_d = (p_idx % 50 == 1)
+        # Phân bổ kịch bản lọc nghiệp vụ theo đúng quy tắc đề bài (TYPEID & TRANG_THAI_DUYET)
+        # - p_idx % 50 == 1 (2%): TYPEID thuộc nhóm giảm ('GT','GM','GG','GK') -> bị loại hoàn toàn
+        # - p_idx % 50 == 2 (2%): TRANG_THAI_DUYET thuộc (1: chờ duyệt, 3: từ chối, 4: đã hủy) -> bị loại hoàn toàn
+        # - Còn lại 96%: TYPEID IS NULL / 'TM' và TRANG_THAI_DUYET IN (0, 2, NULL) -> Hợp lệ đưa vào C360
+        is_typeid_g = (p_idx % 50 == 1)
         is_unapproved = (p_idx % 50 == 2)
 
-        if is_typeid_d:
+        if is_typeid_g:
+            stats["filtered_out_persons_typeid_g"] += 1
             stats["filtered_out_persons_typeid_d"] += 1
         elif is_unapproved:
             stats["filtered_out_persons_unapproved"] += 1
@@ -220,7 +227,7 @@ def generate_seed_dataset(
         # - p_idx % 100 == 3 (1%, thuộc nhóm hợp lệ): có 2 hộ gia đình trùng NGAY_SUA & NGAY_TAO -> phân định bằng ID DESC
         num_households = 1
         is_tie_id_case = False
-        if not is_typeid_d and not is_unapproved:
+        if not is_typeid_g and not is_unapproved:
             if p_idx % 25 == 0:
                 num_households = 2
                 stats["multi_household_persons"] += 1
@@ -242,7 +249,7 @@ def generate_seed_dataset(
         ward_ks, tinh_ks, ward_ks_name = active_wards[(p_idx + 13) % len(active_wards)]
         ma_tinh_ks, ma_xa_ks, dia_chi_ks = tinh_ks, ward_ks, f"KS {ward_ks_name}"
 
-        if not is_typeid_d and not is_unapproved:
+        if not is_typeid_g and not is_unapproved:
             addr_Bucket = p_idx % 100
             if addr_Bucket in (10, 11, 12, 13, 14):
                 # 5%: Mã tỉnh 5 ký tự '01TTT' / '79TTT' (Khảo sát thực tế)
@@ -258,7 +265,7 @@ def generate_seed_dataset(
                 ma_tinh_lh = old_tinh
                 stats["addr_sap_nhap_1to1"] += 1
             elif addr_Bucket == 23:
-                # 1%: Mã xã cũ MO_HO cùng tỉnh Hà Nội ('00999' -> tách ra '00004' và '00007' cùng thuộc '01')
+                # 1%: Mã xã cũ MO_HO cùng tỉnh Hà Nội ('00999' -> tách ra '00004' và '00008' cùng thuộc '01')
                 ma_tinh_hk = None
                 ma_xa_hk = "00999"
                 stats["addr_moho_same_province_00999"] += 1
@@ -286,24 +293,28 @@ def generate_seed_dataset(
             else:
                 stats["addr_chinh_xac"] += 1
 
-        # Kịch bản NGAY_SINH & NGAY_SINH_DT
+        # Kịch bản NGAY_SINH (kiểu NUMBER ở nguồn) & NGAY_SINH_DT
         birth_year = 1955 + (p_idx % 65)
         birth_month = (p_idx % 12) + 1
         birth_day = (p_idx % 28) + 1
-        ngay_sinh = f"{birth_year:04d}{birth_month:02d}{birth_day:02d}"
-        ngay_sinh_dt = f"{birth_year:04d}-{birth_month:02d}-{birth_day:02d} 00:00:00"
+        ngay_sinh: Optional[int] = int(f"{birth_year:04d}{birth_month:02d}{birth_day:02d}")
+        ngay_sinh_dt: Optional[str] = f"{birth_year:04d}-{birth_month:02d}-{birth_day:02d} 00:00:00"
 
-        if not is_typeid_d and not is_unapproved:
+        if not is_typeid_g and not is_unapproved:
             dob_bucket = p_idx % 100
             if dob_bucket in (32, 33, 34):
-                ngay_sinh = f"{birth_day:02d}/{birth_month:02d}/{birth_year:04d}"
-                stats["dob_slash_or_dash"] += 1
+                # Chỉ có năm và tháng: YYYYMM00
+                ngay_sinh = int(f"{birth_year:04d}{birth_month:02d}00")
+                ngay_sinh_dt = None
+                stats["dob_year_month"] += 1
             elif dob_bucket in (35, 36):
-                ngay_sinh = f"{birth_year:04d}-{birth_month:02d}-{birth_day:02d}"
-                stats["dob_slash_or_dash"] += 1
+                # Chỉ có năm và tháng: 6 chữ số YYYYMM
+                ngay_sinh = int(f"{birth_year:04d}{birth_month:02d}")
+                ngay_sinh_dt = None
+                stats["dob_year_month"] += 1
             elif dob_bucket in (37, 38):
-                # Chỉ có năm sinh
-                ngay_sinh = f"{birth_year:04d}" if dob_bucket == 37 else f"{birth_year:04d}0000"
+                # Chỉ có năm sinh: 4 số YYYY hoặc YYYY0000
+                ngay_sinh = int(f"{birth_year:04d}") if dob_bucket == 37 else int(f"{birth_year:04d}0000")
                 ngay_sinh_dt = None
                 stats["dob_year_only"] += 1
             elif dob_bucket == 39:
@@ -311,8 +322,8 @@ def generate_seed_dataset(
                 ngay_sinh = None
                 stats["dob_from_ngay_sinh_dt"] += 1
             elif dob_bucket == 40:
-                # Ngày sinh sai hoàn toàn
-                ngay_sinh = "18509999" if (p_idx % 2 == 0) else "INVALID_DATE"
+                # Ngày sinh sai lịch (30/02) hoặc năm sinh ngoài khoảng hợp lý (< 1850)
+                ngay_sinh = 19950230 if (p_idx % 2 == 0) else 17500101
                 ngay_sinh_dt = None
                 stats["dob_invalid"] += 1
             else:
@@ -322,7 +333,7 @@ def generate_seed_dataset(
         cccd_clean = f"0{tinh_new[:2].zfill(2)}{gioi_tinh - 1}{str(birth_year)[-2:]}{p_idx % 1000000:06d}"
         so_cccd: Optional[str] = cccd_clean
         so_cmtnd: Optional[str] = None
-        if not is_typeid_d and not is_unapproved:
+        if not is_typeid_g and not is_unapproved:
             cccd_bucket = p_idx % 100
             if cccd_bucket in (41, 42):
                 # CCCD để trống, 12 số nằm ở SO_CMTND kèm khoảng trắng
@@ -345,7 +356,7 @@ def generate_seed_dataset(
         phone_clean = f"09{p_idx % 100000000:08d}"
         phone_number: Optional[str] = phone_clean
         so_dien_thoai: Optional[str] = None
-        if not is_typeid_d and not is_unapproved:
+        if not is_typeid_g and not is_unapproved:
             ph_bucket = p_idx % 100
             if ph_bucket in (46, 47):
                 phone_number = f"+849{p_idx % 100000000:08d}"
@@ -363,7 +374,7 @@ def generate_seed_dataset(
         # Kịch bản QUOC_TICH & DM_DAN_TOC_ID
         quoc_tich = "VN"
         dm_dan_toc_id = 171 if (p_idx % 5 != 0) else valid_dantoc[p_idx % len(valid_dantoc)]
-        if not is_typeid_d and not is_unapproved:
+        if not is_typeid_g and not is_unapproved:
             qt_bucket = p_idx % 100
             if qt_bucket == 53:
                 quoc_tich = "233"  # ID của Việt Nam trong DM_QUOC_TICH
@@ -386,7 +397,7 @@ def generate_seed_dataset(
         trang_thai = 1
         tinh_trang_song = 1
         ngay_chet = None
-        if not is_typeid_d and not is_unapproved and (p_idx % 100 == 58):
+        if not is_typeid_g and not is_unapproved and (p_idx % 100 == 58):
             tinh_trang_song = 0
             ngay_chet = "20241015"
             stats["inactive_or_deceased_persons"] += 1
@@ -426,15 +437,15 @@ def generate_seed_dataset(
             r["TINH_TRANG_SONG"] = tinh_trang_song
             r["NGAY_CHET"] = ngay_chet
 
-            if is_typeid_d:
-                r["TYPEID"] = "D"
-                r["TRANG_THAI_DUYET"] = 1
+            if is_typeid_g:
+                r["TYPEID"] = ["GT", "GM", "GG", "GK"][(p_idx // 50) % 4]
+                r["TRANG_THAI_DUYET"] = 0
             elif is_unapproved:
                 r["TYPEID"] = None
-                r["TRANG_THAI_DUYET"] = 0
+                r["TRANG_THAI_DUYET"] = [1, 3, 4][(p_idx // 50) % 3]
             else:
-                r["TYPEID"] = None if (p_idx % 2 == 0) else "1"
-                r["TRANG_THAI_DUYET"] = 1
+                r["TYPEID"] = None if (p_idx % 2 == 0) else "TM"
+                r["TRANG_THAI_DUYET"] = [0, 2, None][p_idx % 3]
 
             if is_older_household:
                 # Dòng hộ cũ có địa chỉ cũ khác để kiểm chứng khử trùng chọn đúng dòng mới nhất
@@ -512,7 +523,10 @@ def generate_seed_dataset(
 
 def main():
     parser = argparse.ArgumentParser(description="Script 1: Sinh dữ liệu giả lập ban đầu cho VSS_HO_GD_NHANKHAU")
-    parser.add_argument("--persons", type=int, default=50000, help="Số lượng công dân (MA_CD) cần sinh")
+    parser.add_argument(
+        "--persons", "--num-persons", dest="persons", type=int, default=50000,
+        help="Số lượng công dân (MA_CD) cần sinh"
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed cố định để tái lập kết quả")
     parser.add_argument("--batch-size", type=int, default=5000, help="Kích thước lô commit")
     parser.add_argument("--db-path", type=str, default=None, help="Đường dẫn file SQLite DB")

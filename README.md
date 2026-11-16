@@ -163,5 +163,5 @@ python p1_source_and_mirror/load_danhmuc.py
 python p1_source_and_mirror/gen_seed_nhankhau.py --num-persons 50000 --batch-size 5000
 
 # Chạy Full Load từ Nguồn sang Mirror
-python p1_source_and_mirror/full_load_jdbc.py --batch-size 5000
+python p1_source_and_mirror/full_load_jdbc.py --partitions 10 --workers 4
 ```

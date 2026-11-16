@@ -5,25 +5,27 @@
     "MIR_VSS_DM_DBHC": 15325
   },
   "nhankhau_full_load": {
-    "snapshot_scn": 1794466529406500,
-    "snapshot_time": "2026-11-12 13:55:29",
+    "snapshot_scn": 1794824305938500,
+    "snapshot_time": "2026-11-16 17:18:25",
     "source_total": 52500,
     "mirror_total": 52500,
     "diff": 0,
     "mismatched_provinces": {},
     "partition_stats": {
-      "part_0": 6000,
-      "part_1": 5000,
-      "part_2": 5000,
-      "part_3": 5500,
-      "part_4": 5000,
-      "part_5": 6000,
-      "part_6": 5000,
-      "part_7": 5000,
-      "part_8": 5000,
-      "part_9": 5000
+      "part_0": 5250,
+      "part_1": 5250,
+      "part_2": 5250,
+      "part_3": 5250,
+      "part_4": 5250,
+      "part_5": 5250,
+      "part_6": 5250,
+      "part_7": 5250,
+      "part_8": 5250,
+      "part_9": 5250
     },
+    "resume_mode": false,
+    "execution_mode": "MULTI_THREAD_RANGE_SCAN",
     "reconciliation_status": "PASSED",
-    "elapsed_sec": 20.22
+    "elapsed_sec": 9.41
   }
 }

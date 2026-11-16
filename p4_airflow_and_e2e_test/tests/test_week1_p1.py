@@ -69,14 +69,21 @@ def test_02_week1_end_to_end_pipeline(tmp_path: Path):
     assert dm_summary["active_provinces_2025"] == 36
     assert dm_summary["active_wards_2025"] == 3322
 
-    # Bước 2: Sinh dữ liệu giả lập ban đầu (Script 1) với 5.000 công dân
+    # Issue 3: Lúc mới khởi tạo bảng Mirror rỗng, UK_MIR_NK chưa được đánh trước khi Full Load
     conn = get_connection(sqlite_path=test_db)
+    cur = conn.cursor()
+    cur.execute("PRAGMA index_list('MIR_VSS_HO_GD_NHANKHAU')")
+    pre_indexes = {row[1]: row[2] for row in cur.fetchall()}
+    assert "UK_MIR_NK" not in pre_indexes
+
+    # Bước 2: Sinh dữ liệu giả lập ban đầu (Script 1) với 5.000 công dân
     seed_stats = generate_seed_dataset(conn, num_persons=5000, seed=42, batch_size=2500, out_dir=tmp_path)
     assert seed_stats["num_persons_total"] == 5000
     assert seed_stats["num_rows_total"] > 5000
+    assert seed_stats["valid_dantoc_pool_size"] == 58
     assert seed_stats["multi_household_persons"] > 0
     assert seed_stats["multi_household_tie_id_persons"] > 0
-    assert seed_stats["filtered_out_persons_typeid_d"] > 0
+    assert seed_stats["filtered_out_persons_typeid_g"] > 0
     assert seed_stats["filtered_out_persons_unapproved"] > 0
     assert seed_stats["addr_5char_tinh_ttt"] > 0
     assert seed_stats["addr_sap_nhap_1to1"] > 0
@@ -85,6 +92,25 @@ def test_02_week1_end_to_end_pipeline(tmp_path: Path):
     assert seed_stats["addr_mismatch_tinh_xa"] > 0
     assert seed_stats["addr_infer_tinh_from_xa"] > 0
     assert seed_stats["addr_invalid_unmapped"] > 0
+
+    # Issue 4: Chứng minh dân tộc được phân bổ từ danh mục CSV thật (> 20 mã khác nhau)
+    cur.execute("SELECT COUNT(DISTINCT DM_DAN_TOC_ID) FROM VSS_HO_GD_NHANKHAU")
+    assert cur.fetchone()[0] > 20
+
+    # Issue 1: Chứng minh quy tắc TYPEID & TRANG_THAI_DUYET chuẩn đề bài
+    cur.execute("SELECT COUNT(*) FROM VSS_HO_GD_NHANKHAU WHERE TYPEID IN ('GT', 'GM', 'GG', 'GK')")
+    assert cur.fetchone()[0] > 0
+    cur.execute("SELECT COUNT(*) FROM VSS_HO_GD_NHANKHAU WHERE TRANG_THAI_DUYET IN (1, 3, 4)")
+    assert cur.fetchone()[0] > 0
+    cur.execute(
+        """
+        SELECT COUNT(DISTINCT MA_CD)
+          FROM VSS_HO_GD_NHANKHAU
+         WHERE COALESCE(TYPEID, 'ZZ') NOT IN ('GT', 'GM', 'GG', 'GK')
+           AND COALESCE(TRANG_THAI_DUYET, 0) NOT IN (1, 3, 4)
+        """
+    )
+    assert cur.fetchone()[0] == seed_stats["expected_valid_c360_persons"]
 
     # Bước 3: Chạy Full Load lần 1 và chạy lại lần 2 để kiểm chứng tính Idempotent + Rebuild Unique Index
     fl_report_1 = run_full_load_all(sqlite_path=test_db)
@@ -95,11 +121,35 @@ def test_02_week1_end_to_end_pipeline(tmp_path: Path):
     assert fl_report_2["nhankhau_full_load"]["mirror_total"] == seed_stats["num_rows_total"]
     assert len(fl_report_2["nhankhau_full_load"]["mismatched_provinces"]) == 0
 
-    # Kiểm chứng Unique Index UK_MIR_NK (MA_CD, MA_HO_GD) đã được bật lại trên bảng Mirror
-    cur = conn.cursor()
+    # Kiểm chứng Unique Index UK_MIR_NK (MA_CD, MA_HO_GD) đã được bật lại trên bảng Mirror sau Full Load
     cur.execute("PRAGMA index_list('MIR_VSS_HO_GD_NHANKHAU')")
     indexes = {row[1]: row[2] for row in cur.fetchall()}  # {index_name: is_unique}
     assert "UK_MIR_NK" in indexes and indexes["UK_MIR_NK"] == 1
+
+    # Issue 2: Kiểm chứng bảng Checkpoint có đủ 10 phân vùng COMPLETED và thử kịch bản Resume
+    cur.execute(
+        "SELECT COUNT(*) FROM MIR_FULL_LOAD_CHECKPOINT WHERE TABLE_NAME = 'VSS_HO_GD_NHANKHAU' AND STATUS = 'COMPLETED'"
+    )
+    assert cur.fetchone()[0] == 10
+
+    cur.execute(
+        "SELECT LOWER_BOUND, UPPER_BOUND FROM MIR_FULL_LOAD_CHECKPOINT WHERE TABLE_NAME = 'VSS_HO_GD_NHANKHAU' AND PARTITION_ID = 'part_5'"
+    )
+    lb5, ub5 = cur.fetchone()
+    cur.execute("DELETE FROM MIR_VSS_HO_GD_NHANKHAU WHERE MA_CD >= ? AND MA_CD < ?", (lb5, ub5))
+    cur.execute(
+        "UPDATE MIR_FULL_LOAD_CHECKPOINT SET STATUS = 'FAILED' WHERE TABLE_NAME = 'VSS_HO_GD_NHANKHAU' AND PARTITION_ID = 'part_5'"
+    )
+    conn.commit()
+
+    fl_resume = run_full_load_all(sqlite_path=test_db, resume=True)
+    assert fl_resume["nhankhau_full_load"]["resume_mode"] is True
+    assert fl_resume["nhankhau_full_load"]["reconciliation_status"] == "PASSED"
+    assert fl_resume["nhankhau_full_load"]["diff"] == 0
+    cur.execute(
+        "SELECT COUNT(*) FROM MIR_FULL_LOAD_CHECKPOINT WHERE TABLE_NAME = 'VSS_HO_GD_NHANKHAU' AND STATUS = 'COMPLETED'"
+    )
+    assert cur.fetchone()[0] == 10
 
     # Kiểm chứng mốc SCN bàn giao cho Debezium CDC
     scn = get_handoff_scn(sqlite_path=test_db)

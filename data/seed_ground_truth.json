@@ -2,6 +2,8 @@
   "num_persons_total": 50000,
   "num_rows_total": 52500,
   "expected_valid_c360_persons": 48000,
+  "valid_dantoc_pool_size": 58,
+  "filtered_out_persons_typeid_g": 1000,
   "filtered_out_persons_typeid_d": 1000,
   "filtered_out_persons_unapproved": 1000,
   "multi_household_persons": 2500,
@@ -16,7 +18,7 @@
   "addr_infer_tinh_from_xa": 1000,
   "addr_invalid_unmapped": 1000,
   "dob_standard_yyyymmdd": 43500,
-  "dob_slash_or_dash": 2500,
+  "dob_year_month": 2500,
   "dob_year_only": 1000,
   "dob_from_ngay_sinh_dt": 500,
   "dob_invalid": 500,
@@ -32,5 +34,5 @@
   "quoctich_id_or_name": 1000,
   "quoctich_invalid": 500,
   "hoten_extra_spaces": 2500,
-  "elapsed_sec": 23.73
+  "elapsed_sec": 4.58
 }

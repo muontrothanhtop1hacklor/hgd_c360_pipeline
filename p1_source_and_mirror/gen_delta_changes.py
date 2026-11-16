@@ -11,7 +11,7 @@ Bao phủ đầy đủ 4 nhóm thao tác bắt buộc theo mục 3 - Phần 1.1:
    - 1b: Thêm dòng hộ gia đình mới (MA_HO_GD mới, NGAY_SUA mới hơn) cho MA_CD đã tồn tại.
 2. UPDATE thông thường:
    - 2a: Sửa dữ liệu bẩn (địa chỉ 99/99999, ngày sinh sai, CCCD sai, SĐT sai) sang sạch -> gỡ cờ DQ_FLAGS.
-   - 2b: Đổi TRANG_THAI_DUYET từ 1 -> 0 hoặc TYPEID -> 'D' -> loại khỏi C360.
+   - 2b: Đổi TRANG_THAI_DUYET sang (1, 3, 4) hoặc TYPEID sang ('GG', 'GT') -> loại khỏi C360.
    - 2c: Đổi TINH_TRANG_SONG từ 1 -> 0 (kèm NGAY_CHET) -> TRANG_THAI_HIEU_LUC về 0.
 3. UPDATE đổi mã định danh MA_CD (Cấp lại mã số BHXH):
    - Đổi MA_CD từ MA_CD_A sang MA_CD_B, lưu MA_CD_A vào cột MA_CD_OLD, cập nhật NGAY_SUA
@@ -68,27 +68,35 @@ def sync_cdc_events_to_mirror(conn: Any, cdc_events: List[Dict[str, Any]]) -> Di
     upserted = 0
     deleted = 0
 
+    def _norm_row(row_dict: Dict[str, Any]) -> Tuple[Any, ...]:
+        d = dict(row_dict)
+        ho_gd = d.get("MA_HO_GD")
+        d["MA_HO_GD"] = str(ho_gd).strip() if (ho_gd is not None and str(ho_gd).strip()) else "HO_MAC_DINH"
+        return tuple(d[c] for c in col_names)
+
     for ev in cdc_events:
         op = ev["op"]
         if op == "DELETE":
+            ho_gd = ev["before"].get("MA_HO_GD")
+            norm_ho_gd = str(ho_gd).strip() if (ho_gd is not None and str(ho_gd).strip()) else "HO_MAC_DINH"
             cur.execute(
                 "DELETE FROM MIR_VSS_HO_GD_NHANKHAU WHERE MA_CD = ? AND MA_HO_GD = ?",
-                (ev["before"]["MA_CD"], ev["before"]["MA_HO_GD"]),
+                (ev["before"]["MA_CD"], norm_ho_gd),
             )
             deleted += cur.rowcount
         elif op == "UPDATE_PK":
             # Debezium phát 1 bản ghi DELETE cho khóa cũ (MA_CD_A, MA_HO_GD) + 1 bản ghi UPSERT cho khóa mới (MA_CD_B, MA_HO_GD)
+            ho_gd = ev["before"].get("MA_HO_GD")
+            norm_ho_gd = str(ho_gd).strip() if (ho_gd is not None and str(ho_gd).strip()) else "HO_MAC_DINH"
             cur.execute(
                 "DELETE FROM MIR_VSS_HO_GD_NHANKHAU WHERE MA_CD = ? AND MA_HO_GD = ?",
-                (ev["before"]["MA_CD"], ev["before"]["MA_HO_GD"]),
+                (ev["before"]["MA_CD"], norm_ho_gd),
             )
             deleted += cur.rowcount
-            row_vals = tuple(ev["after"][c] for c in col_names)
-            cur.execute(upsert_sql, row_vals)
+            cur.execute(upsert_sql, _norm_row(ev["after"]))
             upserted += 1
         elif op in ("INSERT", "UPDATE"):
-            row_vals = tuple(ev["after"][c] for c in col_names)
-            cur.execute(upsert_sql, row_vals)
+            cur.execute(upsert_sql, _norm_row(ev["after"]))
             upserted += 1
 
     conn.commit()
@@ -148,7 +156,7 @@ def apply_delta_changes(
         row["TEN_KD"] = f"THEM{i}"
         row["SO_SO_BHXH"] = new_ma_cd
         row["GIOI_TINH"] = 1 if i % 2 == 1 else 2
-        row["NGAY_SINH"] = "19950820"
+        row["NGAY_SINH"] = 19950820
         row["QUOC_TICH"] = "VN"
         row["DM_DAN_TOC_ID"] = 171
         row["SO_CCCD"] = f"001095990{i:03d}"
@@ -167,8 +175,8 @@ def apply_delta_changes(
         row["DIA_CHI_KS"] = row["DIA_CHI"]
         row["TRANG_THAI"] = 1
         row["TINH_TRANG_SONG"] = 1
-        row["TRANG_THAI_DUYET"] = 1
-        row["TYPEID"] = "1"
+        row["TRANG_THAI_DUYET"] = 2
+        row["TYPEID"] = "TM"
         row["NGAY_TAO"] = "2026-11-10 09:00:00"
         row["NGAY_SUA"] = "2026-11-10 09:00:00"
         row["NGUOI_TAO"] = "DELTA_GEN"
@@ -187,7 +195,8 @@ def apply_delta_changes(
         """
         SELECT MA_CD, MAX(ID)
         FROM VSS_HO_GD_NHANKHAU
-        WHERE COALESCE(TYPEID, '') != 'D' AND TRANG_THAI_DUYET = 1
+        WHERE COALESCE(TYPEID, 'ZZ') NOT IN ('GT', 'GM', 'GG', 'GK')
+          AND COALESCE(TRANG_THAI_DUYET, 0) NOT IN (1, 3, 4)
           AND MA_CD NOT LIKE '99%'
         GROUP BY MA_CD
         HAVING COUNT(*) = 1
@@ -233,8 +242,9 @@ def apply_delta_changes(
         """
         SELECT ID, MA_CD, MA_HO_GD
         FROM VSS_HO_GD_NHANKHAU
-        WHERE COALESCE(TYPEID, '') != 'D' AND TRANG_THAI_DUYET = 1
-          AND (MA_TINH = '99' OR NGAY_SINH = 'INVALID_DATE' OR SO_CCCD = '000000000000')
+        WHERE COALESCE(TYPEID, 'ZZ') NOT IN ('GT', 'GM', 'GG', 'GK')
+          AND COALESCE(TRANG_THAI_DUYET, 0) NOT IN (1, 3, 4)
+          AND (MA_TINH = '99' OR NGAY_SINH IN (19950230, 17500101, '19950230', '17500101') OR SO_CCCD = '000000000000')
         ORDER BY ID
         LIMIT 5
         """
@@ -253,7 +263,7 @@ def apply_delta_changes(
                 MA_XA_LH = '00004',
                 MA_TINH_KS = '01',
                 MA_XA_KS = '00004',
-                NGAY_SINH = '19920615',
+                NGAY_SINH = 19920615,
                 SO_CCCD = '001092008888',
                 PHONE_NUMBER = '0912888999',
                 QUOC_TICH = 'VN',
@@ -271,13 +281,14 @@ def apply_delta_changes(
             )
 
     # -------------------------------------------------------------------------
-    # 2b. UPDATE đổi TRANG_THAI_DUYET từ 1 -> 0 hoặc TYPEID -> 'D' (chọn 4 công dân có 1 hộ)
+    # 2b. UPDATE đổi TRANG_THAI_DUYET sang (1, 3, 4) hoặc TYPEID sang ('GG', 'GT') (chọn 4 công dân có 1 hộ)
     # -------------------------------------------------------------------------
     cur.execute(
         """
         SELECT MIN(ID), MA_CD, MIN(MA_HO_GD)
         FROM VSS_HO_GD_NHANKHAU
-        WHERE COALESCE(TYPEID, '') != 'D' AND TRANG_THAI_DUYET = 1
+        WHERE COALESCE(TYPEID, 'ZZ') NOT IN ('GT', 'GM', 'GG', 'GK')
+          AND COALESCE(TRANG_THAI_DUYET, 0) NOT IN (1, 3, 4)
           AND MA_CD NOT LIKE '99%'
           AND MA_CD > '0000000020'
         GROUP BY MA_CD
@@ -289,17 +300,19 @@ def apply_delta_changes(
     filter_targets = cur.fetchall()
     for idx, (row_id, ma_cd, ma_ho_gd) in enumerate(filter_targets):
         if idx % 2 == 0:
+            new_tt_duyet = [4, 3, 1][(idx // 2) % 3]
             cur.execute(
-                "UPDATE VSS_HO_GD_NHANKHAU SET TRANG_THAI_DUYET = 0, NGAY_SUA = '2026-11-10 10:05:00' WHERE ID = ?",
-                (row_id,),
+                "UPDATE VSS_HO_GD_NHANKHAU SET TRANG_THAI_DUYET = ?, NGAY_SUA = '2026-11-10 10:05:00' WHERE ID = ?",
+                (new_tt_duyet, row_id),
             )
-            reason = "TRANG_THAI_DUYET=0"
+            reason = f"TRANG_THAI_DUYET={new_tt_duyet}"
         else:
+            new_typeid = "GG" if (idx // 2) % 2 == 0 else "GT"
             cur.execute(
-                "UPDATE VSS_HO_GD_NHANKHAU SET TYPEID = 'D', NGAY_SUA = '2026-11-10 10:05:00' WHERE ID = ?",
-                (row_id,),
+                "UPDATE VSS_HO_GD_NHANKHAU SET TYPEID = ?, NGAY_SUA = '2026-11-10 10:05:00' WHERE ID = ?",
+                (new_typeid, row_id),
             )
-            reason = "TYPEID='D'"
+            reason = f"TYPEID='{new_typeid}'"
         updated_row = fetch_row_as_dict(cur, row_id)
         if updated_row:
             cdc_events.append({"op": "UPDATE", "after": updated_row})
@@ -314,7 +327,8 @@ def apply_delta_changes(
         """
         SELECT MIN(ID), MA_CD, MIN(MA_HO_GD)
         FROM VSS_HO_GD_NHANKHAU
-        WHERE COALESCE(TYPEID, '') != 'D' AND TRANG_THAI_DUYET = 1
+        WHERE COALESCE(TYPEID, 'ZZ') NOT IN ('GT', 'GM', 'GG', 'GK')
+          AND COALESCE(TRANG_THAI_DUYET, 0) NOT IN (1, 3, 4)
           AND TINH_TRANG_SONG = 1 AND TRANG_THAI = 1
           AND MA_CD > '0000000050'
         GROUP BY MA_CD
@@ -347,7 +361,8 @@ def apply_delta_changes(
         """
         SELECT MIN(ID), MA_CD, MIN(MA_HO_GD)
         FROM VSS_HO_GD_NHANKHAU
-        WHERE COALESCE(TYPEID, '') != 'D' AND TRANG_THAI_DUYET = 1
+        WHERE COALESCE(TYPEID, 'ZZ') NOT IN ('GT', 'GM', 'GG', 'GK')
+          AND COALESCE(TRANG_THAI_DUYET, 0) NOT IN (1, 3, 4)
           AND MA_CD > '0000000080'
         GROUP BY MA_CD
         HAVING COUNT(*) = 1
@@ -390,7 +405,8 @@ def apply_delta_changes(
         """
         SELECT MA_CD, MAX(ID) AS LATEST_ID, MIN(ID) AS OLDER_ID
         FROM VSS_HO_GD_NHANKHAU
-        WHERE COALESCE(TYPEID, '') != 'D' AND TRANG_THAI_DUYET = 1
+        WHERE COALESCE(TYPEID, 'ZZ') NOT IN ('GT', 'GM', 'GG', 'GK')
+          AND COALESCE(TRANG_THAI_DUYET, 0) NOT IN (1, 3, 4)
           AND MA_CD NOT LIKE '99%' AND MA_CD NOT LIKE '88%'
         GROUP BY MA_CD
         HAVING COUNT(*) = 2
@@ -424,7 +440,8 @@ def apply_delta_changes(
         """
         SELECT MIN(ID), MA_CD, MIN(MA_HO_GD)
         FROM VSS_HO_GD_NHANKHAU
-        WHERE COALESCE(TYPEID, '') != 'D' AND TRANG_THAI_DUYET = 1
+        WHERE COALESCE(TYPEID, 'ZZ') NOT IN ('GT', 'GM', 'GG', 'GK')
+          AND COALESCE(TRANG_THAI_DUYET, 0) NOT IN (1, 3, 4)
           AND MA_CD > '0000000120'
         GROUP BY MA_CD
         HAVING COUNT(*) = 1
