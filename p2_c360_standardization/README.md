@@ -1,6 +1,6 @@
 # TUẦN 2: CHUẨN HÓA DỮ LIỆU CÔNG DÂN (C360) & ĐỒNG BỘ NEAR REAL-TIME (MIRROR -> C360)
 
-> **Trạng thái:** `KẾ HOẠCH & ĐẶC TẢ THỰC HIỆN CHI TIẾT (Sẵn Sàng Triển Khai Tiếp Nối Tuần 1)`  
+> **Trạng thái:** `HOÀN THÀNH 100% & ĐÃ KIỂM THỬ TỰ ĐỘNG (3/3 TEST CASES PASSED)`  
 > **Thư mục quản lý:** `p2_c360_standardization/`  
 > **Tài liệu thiết kế liên kết:** [`design/ThietKeChiTiet_DetailDesign_HGD_C360.md`](../design/ThietKeChiTiet_DetailDesign_HGD_C360.md) (Mục 2: Chi tiết xử lý C360, Mục 4: Bảng lỗi DQ_FLAGS & Sheet QA)
 
@@ -148,34 +148,34 @@ Các bản ghi có dữ liệu lỗi vẫn được lưu trữ tại bảng C360
 
 ---
 
-## 5. Danh Sách Script & File Dự Kiến Triển Khai Tuần 2
+## 5. Danh Sách Script & File Đã Triển Khai Tuần 2
 
 ```text
 p2_c360_standardization/
 ├── README.md                           # Tài liệu chi tiết tuần 2 (file hiện tại)
-├── ddl_c360_schema.sql                 # DDL tạo bảng Map, bảng C360, Queue, Control & Log
-├── build_map_dbhc.py                   # Script sinh 2 bảng Map DBHC (DELETE + INSERT trong TX)
-├── db_c360_cleaner.py                  # Module logic chuẩn hóa dùng chung (Cleaners & Validators)
-├── c360_etl_full_load.py               # Job chạy Full Load toàn bộ C360
-├── c360_nrt_worker.py                  # Worker Near Real-time đọc Queue mỗi phút (MERGE / DELETE)
-└── __init__.py
+├── ddl_c360_schema.sql                 # DDL View hiệu lực, 2 bảng Map, C360 (*_GOC), Queue, Control & Log
+├── build_map_dbhc.py                   # Script sinh 2 bảng Map DBHC (DELETE + INSERT trong TX, có guardrail)
+├── db_c360_cleaner.py                  # Module logic chuẩn hóa dùng chung (Single Source of Truth)
+├── c360_etl_full_load.py               # Job chạy Full Load C360 (streaming fetchmany, khóa PAUSE_NRT)
+└── c360_nrt_worker.py                  # Worker Near Real-time đọc Queue theo đúng QUEUE_ID (MERGE / DELETE)
 ```
 
 ---
 
-## 6. Kế Hoạch Kiểm Thử Nghiệm Thu Tuần 2
+## 6. Kết Quả Kiểm Thử Nghiệm Thu Tuần 2 (Đã Xác Thực)
 
-1. **Kiểm thử Bảng Map (`test_map_dbhc`):**
-   - Đảm bảo 36 tỉnh và 3.322 xã được map chính xác 100%.
-   - Kiểm tra mã xã `'00999'` kích hoạt đúng cờ `XA_MO_HO` và giữ được mã tỉnh Hà Nội `'001'`.
-   - Kiểm tra mã xã `'00998'` kích hoạt đúng cờ `XA_MO_HO` và cả tỉnh lẫn xã đều là `NULL`.
-2. **Kiểm thử Khử trùng & Lọc nghiệp vụ (`test_c360_dedup_and_filter`):**
-   - Với 52.500 dòng nguồn, sau khi lọc `TYPEID` (1.000) và `TRANG_THAI_DUYET` (1.000), còn đúng **48.000 công dân hợp lệ** trên C360.
-   - 2.500 công dân có nhiều hộ phải lấy chính xác dòng có `MODIFY_DATE` mới nhất.
-   - 500 công dân hòa `MODIFY_DATE` và `CREATED_DATE` phải lấy chính xác dòng có `ID` lớn nhất.
-3. **Kiểm thử Near Real-time với Delta Changes (`test_c360_nrt_pipeline`):**
-   - Chạy `gen_delta_changes.py` ở nguồn -> kiểm tra Queue nhận đủ sự kiện.
-   - Kích hoạt `c360_nrt_worker.py` -> kiểm chứng bản ghi C360 được cập nhật ngay trong vòng < 60 giây.
-   - Đổi `MA_CD`: Mã cũ bị xóa hoàn toàn khỏi C360, mã mới xuất hiện với `MA_CD_OLD` được ghi nhận.
-   - Chuyển `TYPEID = 'GG'` hoặc xóa toàn bộ dòng nguồn: Công dân lập tức biến mất khỏi C360.
+Chạy kiểm thử tự động:
+```powershell
+pytest p4_airflow_and_e2e_test/tests/test_week2_p2.py -v
+```
+
+1. **Kiểm thử Bảng Map & View (`test_01_map_dbhc_tables`):**
+   - Map chính xác **36 tỉnh** (200 khóa tra cứu) và **3.322 xã/phường** (13.106 khóa tra cứu).
+   - Mã xã `'00999'` trả về `MO_HO`, giữ tỉnh `'001'`; `'00998'` trả về `MO_HO`, cả tỉnh và xã đều `NULL`.
+   - Guardrail chặn làm mới nếu bảng danh mục nguồn rỗng (tránh xóa nhầm bảng Map hiện hành).
+2. **Kiểm thử Thư viện Chuẩn hóa Dùng Chung (`test_02_cleaner_functions`):**
+   - Kiểm chứng đầy đủ Họ tên, Ngày sinh, CCCD 12 số (chặn chuỗi giả `'000000000000'`), SĐT VN (chặn `'0000000000'`, tự động fallback `SO_DIEN_THOAI`), Dân tộc hết hạn, Quốc tịch (mã `'VN'`, ID `'233'` và tên `'Việt Nam'`), đầy đủ cột `*_GOC`, `NAM_SINH`, cờ địa chỉ `_LH`/`_KS`.
+3. **Kiểm thử Toàn trình Full Load & Near Real-time CDC (`test_03_week2_full_load_and_nrt_pipeline`):**
+   - Full Load C360 khớp **100% phương trình vàng** (`48.000` công dân hợp lệ từ `52.500` dòng nguồn; `COUNT(*) == COUNT(DISTINCT MA_SO_BHXH)`).
+   - Worker NRT xử lý đúng `PAUSE_NRT = 1` (`SKIPPED`), cắt lô nhỏ `max_batch_size` không xóa nhầm sự kiện chưa xử lý, đồng bộ toàn bộ kịch bản `gen_delta_changes.py` (INSERT, UPDATE sửa lỗi, loại trạng thái, đổi `MA_CD`, DELETE lùi hộ gia đình cũ, DELETE toàn bộ) với **0 sai lệch** giữa Mirror và C360.
 

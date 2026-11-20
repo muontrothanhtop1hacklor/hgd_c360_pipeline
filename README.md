@@ -13,7 +13,7 @@ Bảng tổng hợp tiến độ và liên kết trực tiếp đến tài liệ
 | :---: | :--- | :---: | :---: | :--- |
 | **-** | **Bộ Tài Liệu Thiết Kế (Basic & Detail Design)** | `design/` | **HOÀN THÀNH** | [Tài liệu Thiết kế Hệ thống](design/README.md) |
 | **Tuần 1** | **Khảo sát, Thiết kế, Sinh dữ liệu giả lập & Đồng bộ Nguồn $\rightarrow$ Mirror** | `p1_source_and_mirror/` | **HOÀN THÀNH 100%** | [README Chi Tiết Tuần 1](p1_source_and_mirror/README.md) |
-| **Tuần 2** | **Chuẩn hóa dữ liệu công dân (C360) & Đồng bộ Near Real-time qua Queue** | `p2_c360_standardization/` | **KẾ HOẠCH & ĐẶC TẢ** | [README Chi Tiết Tuần 2](p2_c360_standardization/README.md) |
+| **Tuần 2** | **Chuẩn hóa dữ liệu công dân (C360) & Đồng bộ Near Real-time qua Queue** | `p2_c360_standardization/` | **HOÀN THÀNH 100%** | [README Chi Tiết Tuần 2](p2_c360_standardization/README.md) |
 | **Tuần 3** | **Job Đối soát dữ liệu 3 tầng, Dashboard BI & Dịch vụ 4 REST APIs C360** | `p3_reconciliation_bi_api/` | **KẾ HOẠCH & ĐẶC TẢ** | [README Chi Tiết Tuần 3](p3_reconciliation_bi_api/README.md) |
 | **Tuần 4** | **Lập lịch Apache Airflow, Kịch bản Kiểm thử Toàn trình E2E & Nghiệm thu** | `p4_airflow_and_e2e_test/` | **KẾ HOẠCH & ĐẶC TẢ** | [README Chi Tiết Tuần 4](p4_airflow_and_e2e_test/README.md) |
 
@@ -111,15 +111,21 @@ hgd_c360_pipeline/
 │   ├── check_week1_status.py           # Script kiểm tra nhanh tình trạng và đối soát Tuần 1
 │   ├── db_env.py                       # Cơ chế chuyển đổi linh hoạt Oracle <-> SQLite
 │   └── debezium/                       # Cấu hình Debezium Source, JDBC Sink & SCN Handoff
-├── p2_c360_standardization/            # TUẦN 2: Bảng Map DBHC, Chuẩn hóa C360 & Queue Near Real-time
-│   └── README.md                       # Kế hoạch & Đặc tả kỹ thuật chi tiết Tuần 2
+├── p2_c360_standardization/            # TUẦN 2: Bảng Map DBHC, Chuẩn hóa C360 & Queue Near Real-time (Đã hoàn thành 100%)
+│   ├── README.md                       # Báo cáo & Hướng dẫn chi tiết Tuần 2
+│   ├── ddl_c360_schema.sql             # DDL View hiệu lực, 2 bảng Map, C360, Queue, Control & Log
+│   ├── build_map_dbhc.py               # Xây dựng 2 bảng Map DBHC (36 Tỉnh, 3.322 Xã, DELETE+INSERT)
+│   ├── db_c360_cleaner.py              # Single Source of Truth cho toàn bộ logic chuẩn hóa & DQ_FLAGS
+│   ├── c360_etl_full_load.py           # Job Full Load C360 (streaming fetchmany, khóa PAUSE_NRT)
+│   └── c360_nrt_worker.py              # Worker Near Real-time đọc Queue an toàn theo QUEUE_ID (MERGE/DELETE)
 ├── p3_reconciliation_bi_api/           # TUẦN 3: Job Đối soát 3 tầng, Dashboard BI & 4 REST APIs
 │   └── README.md                       # Kế hoạch & Đặc tả kỹ thuật chi tiết Tuần 3
 └── p4_airflow_and_e2e_test/            # TUẦN 4: Airflow DAGs & Bộ Kiểm thử Toàn trình E2E
     ├── README.md                       # Kế hoạch & Đặc tả kỹ thuật chi tiết Tuần 4
     ├── dags/                           # Thư mục chứa các Apache Airflow DAGs
     └── tests/                          # Test Suite tự động bằng Pytest
-        └── test_week1_p1.py            # Unit & Integration test Tuần 1 (2/2 PASSED)
+        ├── test_week1_p1.py            # Unit & Integration test Tuần 1 (2/2 PASSED)
+        └── test_week2_p2.py            # Unit & Integration test Tuần 2 (3/3 PASSED)
 ```
 
 ---
@@ -145,23 +151,24 @@ Yêu cầu Python $\ge 3.10$:
 pip install pytest openpyxl
 ```
 
-### 5.2. Chạy và kiểm tra nhanh kết quả Tuần 1
+### 5.2. Chạy và kiểm tra nhanh kết quả Tuần 1 & Tuần 2
 ```powershell
 # 1. Kiểm tra nhanh toàn bộ trạng thái Tuần 1 (Thiết kế, Số dòng, Index, SCN handoff)
 python p1_source_and_mirror/check_week1_status.py
 
-# 2. Chạy bộ kiểm thử tự động Pytest cho Tuần 1
-pytest p4_airflow_and_e2e_test/tests/test_week1_p1.py -v
+# 2. Chạy bộ kiểm thử tự động Pytest cho Tuần 1 & Tuần 2 (5/5 PASSED)
+pytest p4_airflow_and_e2e_test/tests/ -v
 ```
 
-### 5.3. Quy trình nạp lại dữ liệu từ đầu (Nếu muốn tái tạo DB)
+### 5.3. Quy trình nạp lại dữ liệu từ đầu (Tuần 1 -> Tuần 2)
 ```powershell
-# Nạp danh mục từ CSV
+# Tuần 1: Nạp danh mục CSV -> Sinh 52.500 dòng nguồn -> Full Load sang Mirror
 python p1_source_and_mirror/load_danhmuc.py
-
-# Sinh dữ liệu nguồn mẫu (50.000 công dân -> 52.500 dòng)
 python p1_source_and_mirror/gen_seed_nhankhau.py --num-persons 50000 --batch-size 5000
-
-# Chạy Full Load từ Nguồn sang Mirror
 python p1_source_and_mirror/full_load_jdbc.py --partitions 10 --workers 4
+
+# Tuần 2: Xây dựng 2 Bảng Map DBHC -> Full Load C360 -> Chạy biến động CDC & Worker NRT
+python p2_c360_standardization/build_map_dbhc.py
+python p2_c360_standardization/c360_etl_full_load.py --batch-size 5000
+python p2_c360_standardization/c360_nrt_worker.py --batch-size 5000
 ```
