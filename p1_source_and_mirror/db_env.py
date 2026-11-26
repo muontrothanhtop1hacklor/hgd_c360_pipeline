@@ -9,6 +9,7 @@ cho dự án HGD -> Mirror -> C360 -> BI & API.
   2 vùng bảng Nguồn (VSS_*) và Mirror (MIR_VSS_*), bao gồm cả Unique Index UK_MIR_NK (MA_CD, MA_HO_GD).
 """
 
+import hashlib
 import os
 import sqlite3
 import sys
@@ -159,7 +160,8 @@ def get_connection(
         password = os.environ.get("ORACLE_PASSWORD", "vss123")
         return oracledb.connect(user=user, password=password, dsn=dsn)
 
-    db_file = Path(sqlite_path) if sqlite_path else Path(os.environ.get("SQLITE_DB_PATH", DEFAULT_SQLITE_PATH))
+    env_db_path = os.environ.get("SQLITE_DB_PATH") or os.environ.get("LOCAL_DB_PATH")
+    db_file = Path(sqlite_path) if sqlite_path else Path(env_db_path or DEFAULT_SQLITE_PATH)
     db_file.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_file), timeout=60.0)
     conn.execute("PRAGMA busy_timeout=60000;")
@@ -547,5 +549,91 @@ def init_c360_schema(conn: Any, engine: str = "LOCAL_SQLITE") -> None:
     )
 
     ensure_mirror_indexes(conn, engine=engine)
+    conn.commit()
+
+
+def init_api_and_bi_schema(conn: Any, engine: str = "LOCAL_SQLITE") -> None:
+    """Khởi tạo các bảng Bảo mật API, Async Audit Log và 3 Data Mart Views BI (Tuần 3)."""
+    if engine == "ORACLE":
+        return
+
+    cur = conn.cursor()
+
+    # 1. Bảng Quản lý API Clients (chỉ lưu mã băm SHA-256 của X-API-Key, phân quyền theo Scopes)
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS C360_API_CLIENTS (
+            CLIENT_ID TEXT PRIMARY KEY,
+            API_KEY_HASH TEXT UNIQUE NOT NULL,
+            CLIENT_NAME TEXT NOT NULL,
+            SCOPES TEXT NOT NULL,
+            IS_ACTIVE INTEGER DEFAULT 1,
+            CREATED_DATE TEXT DEFAULT (datetime('now', 'localtime'))
+        );
+        """
+    )
+
+    # Seed tài khoản mặc định cho môi trường Dev/Test từ biến môi trường (không lưu plain-text trong DB)
+    default_key = os.environ.get("DEV_DEFAULT_API_KEY", "c360_secret_key_demo_2026").strip()
+    default_key_hash = hashlib.sha256(default_key.encode("utf-8")).hexdigest()
+    cur.execute(
+        """
+        INSERT INTO C360_API_CLIENTS (CLIENT_ID, API_KEY_HASH, CLIENT_NAME, SCOPES, IS_ACTIVE)
+        VALUES ('client_internal', ?, 'Internal Full-Scope Service Client', 'read:single,read:batch,read:search,read:changes,read:cdc', 1)
+        ON CONFLICT(CLIENT_ID) DO UPDATE SET
+            API_KEY_HASH = excluded.API_KEY_HASH,
+            SCOPES = excluded.SCOPES,
+            IS_ACTIVE = 1;
+        """,
+        (default_key_hash,),
+    )
+
+    restricted_key = os.environ.get("DEV_RESTRICTED_API_KEY", "c360_single_only_key_2026").strip()
+    restricted_key_hash = hashlib.sha256(restricted_key.encode("utf-8")).hexdigest()
+    cur.execute(
+        """
+        INSERT INTO C360_API_CLIENTS (CLIENT_ID, API_KEY_HASH, CLIENT_NAME, SCOPES, IS_ACTIVE)
+        VALUES ('client_single_only', ?, 'Restricted Single-Lookup Client', 'read:single', 1)
+        ON CONFLICT(CLIENT_ID) DO UPDATE SET
+            API_KEY_HASH = excluded.API_KEY_HASH,
+            SCOPES = excluded.SCOPES,
+            IS_ACTIVE = 1;
+        """,
+        (restricted_key_hash,),
+    )
+
+    revoked_key_hash = hashlib.sha256(b"c360_revoked_key_2026").hexdigest()
+    cur.execute(
+        """
+        INSERT OR IGNORE INTO C360_API_CLIENTS (CLIENT_ID, API_KEY_HASH, CLIENT_NAME, SCOPES, IS_ACTIVE)
+        VALUES ('client_revoked', ?, 'Revoked Client', 'read:single', 0);
+        """,
+        (revoked_key_hash,),
+    )
+
+    # 2. Bảng Nhật ký Audit API (Async Batch Audit Log)
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS C360_API_AUDIT_LOG (
+            AUDIT_ID INTEGER PRIMARY KEY AUTOINCREMENT,
+            CLIENT_ID TEXT,
+            ENDPOINT TEXT NOT NULL,
+            METHOD TEXT NOT NULL,
+            QUERY_PARAM TEXT,
+            RESPONSE_STATUS INTEGER NOT NULL,
+            EXEC_TIME_MS REAL,
+            MATCHED_BY TEXT,
+            IP_ADDRESS TEXT,
+            CREATED_TIME TEXT DEFAULT (datetime('now', 'localtime'))
+        );
+        """
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS IDX_AUDIT_CLIENT_DATE ON C360_API_AUDIT_LOG (CLIENT_ID, CREATED_TIME);")
+
+    # 3. Khởi tạo 3 Data Mart Views phục vụ BI nếu tồn tại file views_bi_datamart.sql
+    views_sql_file = PROJECT_ROOT / "p3_reconciliation_bi_api" / "views_bi_datamart.sql"
+    if views_sql_file.exists():
+        cur.executescript(views_sql_file.read_text(encoding="utf-8"))
+
     conn.commit()
 

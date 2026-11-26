@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+FastAPI Application Entry Point: Dịch vụ REST APIs Tra cứu C360 (BAT-C360-007).
+Chuẩn hóa mã lỗi đầu vào theo Detail Design (CHK-12 -> HTTP 400 MSG-E003).
+"""
+
+import os
+import sys
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from p1_source_and_mirror.db_env import (
+    get_connection,
+    init_api_and_bi_schema,
+    init_c360_schema,
+    init_source_and_mirror_schema,
+)
+from p3_reconciliation_bi_api.api.audit import enqueue_audit_log, start_audit_worker, stop_audit_worker
+from p3_reconciliation_bi_api.api.routers.citizen import router as citizen_router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    conn = get_connection()
+    try:
+        init_source_and_mirror_schema(conn)
+        init_c360_schema(conn)
+        init_api_and_bi_schema(conn)
+    finally:
+        conn.close()
+
+    start_audit_worker()
+    yield
+    await stop_audit_worker()
+
+
+app = FastAPI(
+    title="HGD C360 Citizen Lookup REST APIs",
+    description="Hệ thống 4 Dịch vụ REST APIs Tra cứu Dữ liệu Chuẩn hóa Công dân (Customer 360) theo 3 tầng ưu tiên",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Chuẩn hóa mọi lỗi tham số Pydantic (vd: ma_list rỗng hoặc > 1000 mã) về HTTP 400 MSG-E003."""
+    await enqueue_audit_log(
+        None,
+        request.url.path,
+        request.method,
+        "validation_error",
+        status.HTTP_400_BAD_REQUEST,
+        0.1,
+        "VALIDATION_ERROR",
+        request.client.host if request.client else None,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={
+            "detail": {
+                "code": "MSG-E003",
+                "message": "Tham số đầu vào không hợp lệ",
+                "errors": [
+                    {"loc": [str(x) for x in err.get("loc", [])], "msg": err.get("msg", "")}
+                    for err in exc.errors()
+                ],
+            }
+        },
+    )
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(citizen_router)
+
+
+@app.get("/api/health", summary="Kiểm tra sức khỏe dịch vụ API")
+async def health_check():
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM C360_THONG_TIN_CA_NHAN;")
+        cnt = cur.fetchone()[0]
+    finally:
+        conn.close()
+    return {
+        "status": "HEALTHY",
+        "service": "C360_REST_API",
+        "total_c360_records": cnt,
+    }
+
+
+@app.get("/", summary="Thông tin hệ thống")
+async def root():
+    return {
+        "name": "HGD C360 Pipeline REST API",
+        "docs_url": "/docs",
+        "redoc_url": "/redoc",
+        "endpoints": [
+            "GET  /api/v1/ca-nhan/{ma}",
+            "POST /api/v1/ca-nhan/tra-cuu-lo",
+            "GET  /api/v1/ca-nhan/tim-kiem",
+            "GET  /api/v1/ca-nhan/thay-doi",
+        ],
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    host = os.environ.get("API_HOST", "0.0.0.0")
+    port = int(os.environ.get("API_PORT", "8000"))
+    uvicorn.run("p3_reconciliation_bi_api.api.main:app", host=host, port=port, reload=True)

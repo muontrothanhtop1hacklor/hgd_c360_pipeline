@@ -14,7 +14,7 @@ Bảng tổng hợp tiến độ và liên kết trực tiếp đến tài liệ
 | **-** | **Bộ Tài Liệu Thiết Kế (Basic & Detail Design)** | `design/` | **HOÀN THÀNH** | [Tài liệu Thiết kế Hệ thống](design/README.md) |
 | **Tuần 1** | **Khảo sát, Thiết kế, Sinh dữ liệu giả lập & Đồng bộ Nguồn $\rightarrow$ Mirror** | `p1_source_and_mirror/` | **HOÀN THÀNH 100%** | [README Chi Tiết Tuần 1](p1_source_and_mirror/README.md) |
 | **Tuần 2** | **Chuẩn hóa dữ liệu công dân (C360) & Đồng bộ Near Real-time qua Queue** | `p2_c360_standardization/` | **HOÀN THÀNH 100%** | [README Chi Tiết Tuần 2](p2_c360_standardization/README.md) |
-| **Tuần 3** | **Job Đối soát dữ liệu 3 tầng, Dashboard BI & Dịch vụ 4 REST APIs C360** | `p3_reconciliation_bi_api/` | **KẾ HOẠCH & ĐẶC TẢ** | [README Chi Tiết Tuần 3](p3_reconciliation_bi_api/README.md) |
+| **Tuần 3** | **Job Đối soát dữ liệu 3 tầng, Dashboard BI & Dịch vụ 4 REST APIs C360** | `p3_reconciliation_bi_api/` | **HOÀN THÀNH 100%** | [README Chi Tiết Tuần 3](p3_reconciliation_bi_api/README.md) |
 | **Tuần 4** | **Lập lịch Apache Airflow, Kịch bản Kiểm thử Toàn trình E2E & Nghiệm thu** | `p4_airflow_and_e2e_test/` | **KẾ HOẠCH & ĐẶC TẢ** | [README Chi Tiết Tuần 4](p4_airflow_and_e2e_test/README.md) |
 
 ---
@@ -118,14 +118,25 @@ hgd_c360_pipeline/
 │   ├── db_c360_cleaner.py              # Single Source of Truth cho toàn bộ logic chuẩn hóa & DQ_FLAGS
 │   ├── c360_etl_full_load.py           # Job Full Load C360 (streaming fetchmany, khóa PAUSE_NRT)
 │   └── c360_nrt_worker.py              # Worker Near Real-time đọc Queue an toàn theo QUEUE_ID (MERGE/DELETE)
-├── p3_reconciliation_bi_api/           # TUẦN 3: Job Đối soát 3 tầng, Dashboard BI & 4 REST APIs
-│   └── README.md                       # Kế hoạch & Đặc tả kỹ thuật chi tiết Tuần 3
+├── p3_reconciliation_bi_api/           # TUẦN 3: Job Đối soát 3 tầng, Dashboard BI & 4 REST APIs (Đã hoàn thành 100%)
+│   ├── README.md                       # Báo cáo & Hướng dẫn chi tiết Tuần 3
+│   ├── ddl_api_security.sql            # DDL bảng bảo mật API Clients (SHA-256) & Async Audit Log
+│   ├── views_bi_datamart.sql           # DDL 3 Data Mart Views phục vụ Dashboard BI
+│   ├── reconcile_3_tiers.py            # Job đối soát tự động 3 tầng (Nguồn <-> Mirror <-> C360)
+│   ├── metabase_setup.py               # Khởi tạo BI Views, trích xuất HTML Dashboard & đẩy Metabase API
+│   └── api/                            # Dịch vụ 4 REST APIs C360 (FastAPI)
+│       ├── main.py                     # Ứng dụng FastAPI & chuẩn hóa lỗi 400 MSG-E003
+│       ├── auth.py                     # Xác thực X-API-Key SHA-256 & phân quyền Scopes
+│       ├── audit.py                    # Async Batch Audit Logger vào C360_API_AUDIT_LOG
+│       ├── schemas.py                  # Pydantic Request/Response Schemas
+│       └── routers/citizen.py          # 4 Endpoints tra cứu (Cascade 3 tầng, Lô, Tìm kiếm, Thay đổi)
 └── p4_airflow_and_e2e_test/            # TUẦN 4: Airflow DAGs & Bộ Kiểm thử Toàn trình E2E
     ├── README.md                       # Kế hoạch & Đặc tả kỹ thuật chi tiết Tuần 4
     ├── dags/                           # Thư mục chứa các Apache Airflow DAGs
     └── tests/                          # Test Suite tự động bằng Pytest
         ├── test_week1_p1.py            # Unit & Integration test Tuần 1 (2/2 PASSED)
-        └── test_week2_p2.py            # Unit & Integration test Tuần 2 (3/3 PASSED)
+        ├── test_week2_p2.py            # Unit & Integration test Tuần 2 (3/3 PASSED)
+        └── test_week3_api_and_recon.py # Unit & Integration test Tuần 3 (3/3 PASSED)
 ```
 
 ---
@@ -151,12 +162,19 @@ Yêu cầu Python $\ge 3.10$:
 pip install pytest openpyxl
 ```
 
-### 5.2. Chạy và kiểm tra nhanh kết quả Tuần 1 & Tuần 2
+### 5.2. Chạy và kiểm tra nhanh kết quả Tuần 1, Tuần 2 & Tuần 3
 ```powershell
-# 1. Kiểm tra nhanh toàn bộ trạng thái Tuần 1 (Thiết kế, Số dòng, Index, SCN handoff)
+# 1. Kiểm tra nhanh trạng thái Tuần 1 (Thiết kế, Số dòng, Index, SCN handoff)
 python p1_source_and_mirror/check_week1_status.py
 
-# 2. Chạy bộ kiểm thử tự động Pytest cho Tuần 1 & Tuần 2 (5/5 PASSED)
+# 2. Chạy đối soát tự động 3 tầng (Nguồn <-> Mirror <-> C360) & khởi tạo BI Dashboard
+python p3_reconciliation_bi_api/reconcile_3_tiers.py
+python p3_reconciliation_bi_api/metabase_setup.py
+
+# 3. Khởi chạy cổng dịch vụ 4 REST APIs Tra cứu C360 (Swagger UI tại http://localhost:8000/docs)
+uvicorn p3_reconciliation_bi_api.api.main:app --host 0.0.0.0 --port 8000
+
+# 4. Chạy bộ kiểm thử tự động Pytest cho Tuần 1, Tuần 2 & Tuần 3 (8/8 PASSED)
 pytest p4_airflow_and_e2e_test/tests/ -v
 ```
 

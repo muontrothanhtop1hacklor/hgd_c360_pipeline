@@ -1,0 +1,32 @@
+-- ==============================================================================
+-- DDL BẢNG BẢO MẬT API CLIENTS (SHA-256) & NHẬT KÝ ASYNC BATCH AUDIT LOG
+-- Phân hệ: p3_reconciliation_bi_api (Tuần 3)
+-- Tương thích: Oracle 19c/21c & SQLite WAL mode
+-- ==============================================================================
+
+-- 1. BẢNG QUẢN LÝ TÀI KHOẢN API CLIENTS (CHỈ LƯU MÃ BĂM SHA-256 CỦA X-API-KEY)
+CREATE TABLE C360_API_CLIENTS (
+    CLIENT_ID           VARCHAR2(50) PRIMARY KEY,
+    API_KEY_HASH        VARCHAR2(64) NOT NULL,
+    CLIENT_NAME         VARCHAR2(200) NOT NULL,
+    SCOPES              VARCHAR2(200) NOT NULL,
+    IS_ACTIVE           NUMBER(1) DEFAULT 1,
+    CREATED_DATE        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT UK_API_CLIENT_HASH UNIQUE (API_KEY_HASH)
+);
+
+-- 2. BẢNG NHẬT KÝ AUDIT TRA CỨU API (ASYNC BATCH AUDIT LOG)
+CREATE TABLE C360_API_AUDIT_LOG (
+    AUDIT_ID            NUMBER(19) GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    CLIENT_ID           VARCHAR2(50),
+    ENDPOINT            VARCHAR2(200) NOT NULL,
+    METHOD              VARCHAR2(10) NOT NULL,
+    QUERY_PARAM         VARCHAR2(1000),
+    RESPONSE_STATUS     NUMBER(4) NOT NULL,
+    EXEC_TIME_MS        NUMBER(10,2),
+    MATCHED_BY          VARCHAR2(50),
+    IP_ADDRESS          VARCHAR2(50),
+    CREATED_TIME        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IDX_AUDIT_CLIENT_DATE ON C360_API_AUDIT_LOG (CLIENT_ID, CREATED_TIME);

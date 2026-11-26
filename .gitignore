@@ -18,6 +18,7 @@ data/*.db-shm
 data/generated/
 data/logs/
 data/checkpoints/
+data/*.html
 *.parquet
 *.orc
 

@@ -1,0 +1,156 @@
+{
+  "executed_at": "2026-11-26 09:37:18",
+  "elapsed_sec": 2.27,
+  "overall_status": "PASSED",
+  "tier1_source_vs_mirror": {
+    "tables": {
+      "DM_DANTOC": {
+        "source_rows": 59,
+        "mirror_rows": 59,
+        "diff": 0,
+        "status": "PASSED"
+      },
+      "DM_QUOC_TICH": {
+        "source_rows": 243,
+        "mirror_rows": 243,
+        "diff": 0,
+        "status": "PASSED"
+      },
+      "DM_DBHC": {
+        "source_rows": 15325,
+        "mirror_rows": 15325,
+        "diff": 0,
+        "status": "PASSED"
+      },
+      "HO_GD_NHANKHAU": {
+        "source_rows": 52500,
+        "mirror_rows": 52500,
+        "diff": 0,
+        "status": "PASSED"
+      }
+    },
+    "province_groups_checked": 71,
+    "mismatched_provinces": {},
+    "status": "PASSED"
+  },
+  "tier2_mirror_vs_c360": {
+    "mirror_total_rows": 52500,
+    "mirror_valid_distinct_citizens": 48000,
+    "c360_total_citizens": 48000,
+    "c360_distinct_citizens": 48000,
+    "golden_equation_diff": 0,
+    "leaked_invalid_records": 0,
+    "missing_valid_records": 0,
+    "multi_household_sample_test": {
+      "samples_checked": 100,
+      "fields_verified_per_sample": [
+        "SOURCE_MA_HO_GD",
+        "HO_TEN",
+        "NGAY_SINH_CHUAN",
+        "SO_DINH_DANH",
+        "MA_TINH_THUONG_TRU",
+        "MA_XA_THUONG_TRU",
+        "SO_DIEN_THOAI",
+        "DQ_FLAGS"
+      ],
+      "passed": true,
+      "errors": []
+    },
+    "status": "PASSED"
+  },
+  "tier3_data_quality": {
+    "total_citizens": 48000,
+    "clean_citizens": 35131,
+    "dirty_citizens": 12869,
+    "clean_percentage": 73.19,
+    "flag_breakdown": {
+      "TINH_KHONG_MAP": {
+        "count": 1500,
+        "percentage": 3.12
+      },
+      "XA_KHONG_MAP": {
+        "count": 1000,
+        "percentage": 2.08
+      },
+      "XA_MO_HO": {
+        "count": 1000,
+        "percentage": 2.08
+      },
+      "TINH_LECH_XA": {
+        "count": 1000,
+        "percentage": 2.08
+      },
+      "NGAY_SINH_LOI": {
+        "count": 1000,
+        "percentage": 2.08
+      },
+      "SDT_LOI": {
+        "count": 500,
+        "percentage": 1.04
+      },
+      "KHONG_SO_DINH_DANH": {
+        "count": 1500,
+        "percentage": 3.12
+      },
+      "CANH_BAO_CMND9": {
+        "count": 1500,
+        "percentage": 3.12
+      },
+      "DAN_TOC_LOI": {
+        "count": 1000,
+        "percentage": 2.08
+      },
+      "QUOC_TICH_LOI": {
+        "count": 500,
+        "percentage": 1.04
+      },
+      "HOTEN_THUA_KHOANG_TRANG": {
+        "count": 2500,
+        "percentage": 5.21
+      }
+    },
+    "aux_address_flag_breakdown": {
+      "TINH_LH_LECH_XA": {
+        "count": 3851,
+        "percentage": 8.02
+      }
+    },
+    "top_dirty_provinces": [
+      {
+        "ma_tinh": "CHUA_XAC_DINH",
+        "ten_tinh": "Chưa xác định",
+        "total_records": 1500,
+        "dirty_records": 1500,
+        "dirty_pct": 100.0
+      },
+      {
+        "ma_tinh": "001",
+        "ten_tinh": "Thành phố Hà Nội",
+        "total_records": 2386,
+        "dirty_records": 1012,
+        "dirty_pct": 42.41
+      },
+      {
+        "ma_tinh": "033",
+        "ten_tinh": "Tỉnh Hưng Yên",
+        "total_records": 1491,
+        "dirty_records": 391,
+        "dirty_pct": 26.22
+      },
+      {
+        "ma_tinh": "022",
+        "ten_tinh": "Thành phố Quảng Ninh",
+        "total_records": 753,
+        "dirty_records": 195,
+        "dirty_pct": 25.9
+      },
+      {
+        "ma_tinh": "025",
+        "ten_tinh": "Tỉnh Phú Thọ",
+        "total_records": 2085,
+        "dirty_records": 532,
+        "dirty_pct": 25.52
+      }
+    ]
+  }
+}
