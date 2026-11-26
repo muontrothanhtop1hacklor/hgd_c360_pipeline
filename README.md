@@ -121,11 +121,11 @@ hgd_c360_pipeline/
 ├── p3_reconciliation_bi_api/           # TUẦN 3: Job Đối soát 3 tầng, Dashboard BI & 4 REST APIs (Đã hoàn thành 100%)
 │   ├── README.md                       # Báo cáo & Hướng dẫn chi tiết Tuần 3
 │   ├── ddl_api_security.sql            # DDL bảng bảo mật API Clients (SHA-256) & Async Audit Log
-│   ├── views_bi_datamart.sql           # DDL 3 Data Mart Views phục vụ Dashboard BI
+│   ├── views_bi_datamart.sql           # DDL 5 Data Mart Views phục vụ Dashboard BI (Tuổi/GT, Dân tộc, Tỉnh TT/LH, DQ, Sync)
 │   ├── reconcile_3_tiers.py            # Job đối soát tự động 3 tầng (Nguồn <-> Mirror <-> C360)
-│   ├── metabase_setup.py               # Khởi tạo BI Views, trích xuất HTML Dashboard & đẩy Metabase API
-│   └── api/                            # Dịch vụ 4 REST APIs C360 (FastAPI)
-│       ├── main.py                     # Ứng dụng FastAPI & chuẩn hóa lỗi 400 MSG-E003
+│   ├── metabase_setup.py               # Render Dashboard 6 biểu đồ 'Thông tin cá nhân – Gold' & đẩy Metabase API
+│   └── api/                            # Dịch vụ 4 REST APIs C360 & Live BI Dashboard (FastAPI)
+│       ├── main.py                     # FastAPI Entrypoint (/dashboard, /docs & chuẩn hóa lỗi 400 MSG-E003)
 │       ├── auth.py                     # Xác thực X-API-Key SHA-256 & phân quyền Scopes
 │       ├── audit.py                    # Async Batch Audit Logger vào C360_API_AUDIT_LOG
 │       ├── schemas.py                  # Pydantic Request/Response Schemas
@@ -136,7 +136,7 @@ hgd_c360_pipeline/
     └── tests/                          # Test Suite tự động bằng Pytest
         ├── test_week1_p1.py            # Unit & Integration test Tuần 1 (2/2 PASSED)
         ├── test_week2_p2.py            # Unit & Integration test Tuần 2 (3/3 PASSED)
-        └── test_week3_api_and_recon.py # Unit & Integration test Tuần 3 (3/3 PASSED)
+        └── test_week3_api_and_recon.py # Unit & Integration test Tuần 3 + Live BI Flow (4/4 PASSED)
 ```
 
 ---
@@ -171,10 +171,14 @@ python p1_source_and_mirror/check_week1_status.py
 python p3_reconciliation_bi_api/reconcile_3_tiers.py
 python p3_reconciliation_bi_api/metabase_setup.py
 
-# 3. Khởi chạy cổng dịch vụ 4 REST APIs Tra cứu C360 (Swagger UI tại http://localhost:8000/docs)
+# 3. Khởi chạy cổng 4 REST APIs & Live BI Dashboard (Swagger: /docs | Live BI: http://localhost:8000/dashboard)
 uvicorn p3_reconciliation_bi_api.api.main:app --host 0.0.0.0 --port 8000
 
-# 4. Chạy bộ kiểm thử tự động Pytest cho Tuần 1, Tuần 2 & Tuần 3 (8/8 PASSED)
+# 4. Demo trực quan 4 bước (Before -> Bơm 100k dòng Delta -> Kafka CDC -> After trên BI Dashboard):
+python p1_source_and_mirror/gen_delta_changes.py --insert-count 100000
+python p2_c360_standardization/c360_nrt_worker.py --batch-size 20000
+
+# 5. Chạy bộ kiểm thử tự động Pytest cho Tuần 1, Tuần 2 & Tuần 3 (9/9 PASSED)
 pytest p4_airflow_and_e2e_test/tests/ -v
 ```
 

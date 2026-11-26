@@ -1,6 +1,6 @@
 # TUẦN 3: ĐỐI SOÁT DỮ LIỆU 3 TẦNG, DASHBOARD BI & DỊCH VỤ REST API C360
 
-> **Trạng thái:** `HOÀN THÀNH 100% & ĐÃ KIỂM THỬ TỰ ĐỘNG (3/3 TEST CASES PASSED)`  
+> **Trạng thái:** `HOÀN THÀNH 100% & ĐÃ KIỂM THỬ TỰ ĐỘNG (4/4 TEST CASES PASSED)`  
 > **Thư mục quản lý:** `p3_reconciliation_bi_api/`  
 > **Tài liệu thiết kế liên kết:** [`design/ThietKeChiTiet_DetailDesign_HGD_C360.md`](../design/ThietKeChiTiet_DetailDesign_HGD_C360.md) (Mục 05 Bước 5.1–5.6, SQL-06..09, CHK-11..12, UT-013..015)
 
@@ -13,9 +13,9 @@ Sau khi dữ liệu công dân được chuẩn hóa sang bảng `C360_THONG_TIN
    - Đối soát liên tầng **Nguồn (`VSS_*`) $\leftrightarrow$ Mirror (`MIR_VSS_*`) $\leftrightarrow$ Bảng Chuẩn hóa (`C360_THONG_TIN_CA_NHAN`)**.
    - Kiểm chứng phương trình vàng `COUNT(DISTINCT MA_CD)` hợp lệ trên Mirror **khớp 100%** với `COUNT(*)` trên C360 và đối chiếu tập hợp 2 chiều bằng toán tử `EXCEPT` (an toàn tuyệt đối với `NULL`).
    - Đối chiếu sâu **100 mẫu công dân có $\ge 2$ hộ gia đình** trên toàn bộ 8 trường chuẩn hóa (`SOURCE_MA_HO_GD`, `HO_TEN`, `NGAY_SINH_CHUAN`, `SO_DINH_DANH`, `MA_TINH_THUONG_TRU`, `MA_XA_THUONG_TRU`, `SO_DIEN_THOAI`, `DQ_FLAGS`).
-2. **Data Mart Views & Dashboard Báo cáo BI (`views_bi_datamart.sql`, `metabase_setup.py`):**
-   - Triển khai 3 Data Mart Views (`V_BI_THONG_KE_DIA_BAN`, `V_BI_CHAT_LUONG_DU_LIEU`, `V_BI_GIAM_SAT_DONG_BO`) dùng kỹ thuật so khớp token chính xác `';' || DQ_FLAGS || ';' LIKE '%;<FLAG>;%'`.
-   - Hỗ trợ đồng thời cả đẩy cấu hình biểu đồ tự động lên Metabase REST API lẫn kết xuất Dashboard HTML độc lập (`data/bi_dashboard_preview.html`) để xem tức thì không tốn RAM.
+2. **Data Mart Views & Live BI Dashboard "Thông tin cá nhân – Gold" (`views_bi_datamart.sql`, `metabase_setup.py`):**
+   - Triển khai **5 Data Mart Views** (`V_BI_THONG_KE_DIA_BAN`, `V_BI_CHAT_LUONG_DU_LIEU`, `V_BI_GIAM_SAT_DONG_BO`, `V_BI_NHOM_DAN_TOC`, `V_BI_TINH_THUONG_TRU_LIEN_HE`) dùng kỹ thuật so khớp token chính xác `';' || DQ_FLAGS || ';' LIKE '%;<FLAG>;%'`.
+   - Giao diện **Live BI Dashboard Dark-Mode** (`GET /dashboard` hoặc `data/bi_dashboard_preview.html`) dựng đầy đủ **6 biểu đồ trực quan** (Nhóm tuổi Nam/Nữ, Tổng số người, Tỷ trọng nhóm dân tộc, Top dân tộc thiểu số, Tỉnh thường trú vs Liên hệ, Chất lượng dữ liệu `DQ_FLAGS`) kèm **Tab 2 giám sát Kafka CDC Topics & Queue Near Real-time** hỗ trợ tự động làm mới mỗi 5 giây.
 3. **Dịch vụ 4 REST APIs Tra cứu C360 Hiệu năng cao (`p3_reconciliation_bi_api/api/`):**
    - 100% truy vấn tra cứu đều đi qua Index (`UK_C360_MA_BHXH`, `IDX_C360_MA_CU`, `IDX_C360_SO_DINH_DANH`, `IDX_C360_TIM_KIEM`, `IDX_C360_THAY_DOI`), không quét Full Table.
    - Bảo mật `X-API-Key` lưu mã băm **SHA-256** trong `C360_API_CLIENTS`, phân quyền theo từng `scope` (`401 MSG-E001` / `403 MSG-E002`).
@@ -99,7 +99,31 @@ Sau khi dữ liệu công dân được chuẩn hóa sang bảng `C360_THONG_TIN
 
 ---
 
-## 5. Danh Sách Script & File Đã Triển Khai Tuần 3
+## 5. Kịch Bản Demo Trực Quan 4 Bước (Before $\rightarrow$ Delta 100k $\rightarrow$ Kafka CDC $\rightarrow$ After BI)
+
+Thực hiện lần lượt 4 bước sau để minh chứng trực tiếp luồng dữ liệu sống từ Nguồn đến BI & API:
+
+```powershell
+# Bước 1 (Dữ liệu ban đầu trên báo cáo): Bật dịch vụ API & mở trình duyệt tại http://localhost:8000/dashboard
+# -> Quan sát Tab 1 "Thông tin cá nhân – Gold": Tổng số người = 48,000 (bật Auto-refresh 5s)
+uvicorn p3_reconciliation_bi_api.api.main:app --host 0.0.0.0 --port 8000
+
+# Bước 2 (Bơm biến động lớn vào bảng nguồn): Mở terminal thứ 2, đẩy thêm 100.000 dòng nhân khẩu mới + UPDATE/DELETE
+python p1_source_and_mirror/gen_delta_changes.py --insert-count 100000
+
+# Bước 3 (Kiểm tra CDC đẩy lên Kafka & Hàng đợi): Chuyển sang Tab 2 "UI for Apache Kafka & NRT Sync"
+# -> Topic vss.VSS.VSS_HO_GD_NHANKHAU ghi nhận > 100,000 messages (~273.8 MB) và Queue Pending > 100,000
+
+# Bước 4 (Chuẩn hóa Near Real-time & phản ánh lên BI): Chạy Worker NRT (hoặc thêm cờ --run-nrt ở Bước 2)
+python p2_c360_standardization/c360_nrt_worker.py --batch-size 50000
+python p2_c360_standardization/c360_nrt_worker.py --batch-size 60000
+python p3_reconciliation_bi_api/reconcile_3_tiers.py
+# -> Quay lại Tab 1: Tổng số người tự động nhảy từ 48,000 lên ~144,000 và Đối soát 3 tầng PASSED 100%!
+```
+
+---
+
+## 6. Danh Sách Script & File Đã Triển Khai Tuần 3
 
 ```text
 p3_reconciliation_bi_api/

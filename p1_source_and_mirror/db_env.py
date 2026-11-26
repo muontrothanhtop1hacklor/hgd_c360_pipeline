@@ -314,6 +314,25 @@ def init_source_and_mirror_schema(conn: Any, engine: str = "LOCAL_SQLITE") -> No
         """
     )
 
+    # 7. Bảng ghi nhận lưu lượng CDC Topic (mô phỏng thông số Kafka Topic phục vụ giám sát & demo)
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS MIR_CDC_TOPIC_METRICS (
+            BATCH_ID INTEGER PRIMARY KEY AUTOINCREMENT,
+            TOPIC_NAME TEXT NOT NULL,
+            PARTITIONS INTEGER DEFAULT 3,
+            OP_INSERT INTEGER DEFAULT 0,
+            OP_UPDATE INTEGER DEFAULT 0,
+            OP_DELETE INTEGER DEFAULT 0,
+            TOTAL_MESSAGES INTEGER NOT NULL,
+            PAYLOAD_BYTES INTEGER NOT NULL,
+            MIRROR_UPSERTED INTEGER DEFAULT 0,
+            MIRROR_DELETED INTEGER DEFAULT 0,
+            CREATED_AT TEXT DEFAULT (datetime('now', 'localtime'))
+        );
+        """
+    )
+
     conn.commit()
 
 

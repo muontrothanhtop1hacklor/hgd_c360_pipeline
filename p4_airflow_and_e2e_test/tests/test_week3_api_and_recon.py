@@ -37,10 +37,12 @@ from p1_source_and_mirror.db_env import (
     init_source_and_mirror_schema,
 )
 from p1_source_and_mirror.full_load_jdbc import run_full_load_all
+from p1_source_and_mirror.gen_delta_changes import apply_delta_changes
 from p1_source_and_mirror.gen_seed_nhankhau import generate_seed_dataset
 from p1_source_and_mirror.load_danhmuc import run_load_danhmuc
 from p2_c360_standardization.build_map_dbhc import build_and_refresh_dbhc_maps
 from p2_c360_standardization.c360_etl_full_load import run_c360_full_load
+from p2_c360_standardization.c360_nrt_worker import run_c360_nrt_batch
 from p3_reconciliation_bi_api.api.main import app
 from p3_reconciliation_bi_api.metabase_setup import build_bi_datamart_and_snapshot
 from p3_reconciliation_bi_api.reconcile_3_tiers import run_3tier_reconciliation
@@ -172,6 +174,14 @@ def test_02_bi_datamart_views_and_dashboard_snapshot(week3_env: Dict[str, Any], 
     cur.execute("SELECT COUNT(*) FROM V_BI_GIAM_SAT_DONG_BO WHERE BATCH_TYPE = 'FULL_LOAD' AND STATUS = 'SUCCESS';")
     assert cur.fetchone()[0] >= 1
 
+    # View 4 (Nhóm dân tộc) & View 5 (Tỉnh thường trú vs liên hệ)
+    cur.execute("SELECT SUM(SO_NGUOI) FROM V_BI_NHOM_DAN_TOC;")
+    assert cur.fetchone()[0] == expected_total
+    cur.execute("SELECT SUM(SO_THUONG_TRU), SUM(SO_LIEN_HE) FROM V_BI_TINH_THUONG_TRU_LIEN_HE;")
+    tt_sum, lh_sum = cur.fetchone()
+    assert tt_sum == expected_total
+    assert lh_sum == expected_total
+
     conn.close()
 
 
@@ -212,6 +222,14 @@ def test_03_rest_api_auth_cascade_search_feed_and_audit(week3_env: Dict[str, Any
 
     # Dùng context manager để kích hoạt lifespan (khởi chạy & xả sạch Async Batch Audit Worker)
     with TestClient(app) as client:
+        # 0. Kiểm tra Live BI Dashboard HTML (/dashboard) & dữ liệu JSON (/api/v1/bi/dashboard-data)
+        r_dash = client.get("/dashboard")
+        assert r_dash.status_code == 200
+        assert "Thông tin cá nhân – Gold" in r_dash.text
+        r_dash_json = client.get("/api/v1/bi/dashboard-data")
+        assert r_dash_json.status_code == 200
+        assert r_dash_json.json()["group1_demographics"]["total_citizens"] >= week3_env["expected_valid_citizens"]
+
         # 1. Kiểm tra Xác thực 401 & Phân quyền Scope 403 (CHK-11)
         r_no_key = client.get("/api/v1/ca-nhan/API_TEST_A1")
         assert r_no_key.status_code == 401
@@ -373,3 +391,43 @@ def test_03_rest_api_auth_cascade_search_feed_and_audit(week3_env: Dict[str, Any
     cur.execute("DELETE FROM C360_THONG_TIN_CA_NHAN WHERE MA_SO_BHXH IN ('API_TEST_A1', 'API_TEST_B1', 'API_TEST_B2');")
     conn.commit()
     conn.close()
+
+
+def test_04_bulk_delta_cdc_to_bi_dashboard_flow(week3_env: Dict[str, Any], tmp_path: Path):
+    """
+    Kiểm chứng đúng kịch bản 4 bước Before -> Script Delta -> Kafka CDC -> After trên BI:
+      1. Đọc tổng số người ban đầu trên Dashboard BI (Before).
+      2. Bơm lô biến động lớn (2.000 công dân mới + UPDATE/DELETE) vào nguồn -> CDC đẩy sang Mirror.
+      3. Kiểm tra Topic Kafka CDC (MIR_CDC_TOPIC_METRICS) & Queue Pending đã ghi nhận đủ > 2.000 messages.
+      4. Chạy Near Real-time Worker -> Kiểm tra số liệu trên Dashboard BI tự động nhảy lên khớp 100% đối soát.
+    """
+    db_path = week3_env["db_path"]
+
+    with TestClient(app) as client:
+        before_data = client.get("/api/v1/bi/dashboard-data").json()
+        total_before = before_data["group1_demographics"]["total_citizens"]
+
+        conn = get_connection(sqlite_path=db_path)
+        apply_delta_changes(conn, sync_to_mirror=True, out_dir=tmp_path, bulk_insert_count=2000)
+        conn.close()
+
+        # Bước 3: Kiểm tra trạng thái trung gian (CDC Topic đã nhận > 2.000 messages, Queue đang chờ xử lý)
+        mid_data = client.get("/api/v1/bi/dashboard-data").json()
+        assert mid_data["group3_sync_monitoring"]["cdc_topic"]["total_messages"] >= 2000
+        assert mid_data["group3_sync_monitoring"]["queue_pending"] >= 2000
+
+        # Bước 4: Kích hoạt luồng Near Real-time chuẩn hóa & cập nhật C360
+        while True:
+            nrt = run_c360_nrt_batch(sqlite_path=db_path, max_batch_size=5000)
+            if nrt["status"] == "EMPTY":
+                break
+
+        after_data = client.get("/api/v1/bi/dashboard-data").json()
+        total_after = after_data["group1_demographics"]["total_citizens"]
+        assert total_after > total_before + 1850  # ~96% của 2.000 dòng mới là công dân hợp lệ
+        assert after_data["group3_sync_monitoring"]["queue_pending"] == 0
+
+    # Đối soát 3 tầng sau biến động lô lớn phải PASSED 100% (golden_equation_diff == 0)
+    final_recon = run_3tier_reconciliation(sqlite_path=db_path, out_path=tmp_path / "after_delta_recon.json")
+    assert final_recon["overall_status"] == "PASSED"
+    assert final_recon["tier2_mirror_vs_c360"]["golden_equation_diff"] == 0

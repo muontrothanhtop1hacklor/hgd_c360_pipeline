@@ -3,30 +3,37 @@
 """
 BAT-C360-002 (Script 2 - Change / Delta Generator):
 Sinh dữ liệu biến động trực tiếp trên bảng nguồn VSS.VSS_HO_GD_NHANKHAU để kiểm thử
-luồng CDC (Debezium -> Mirror) và luồng Near Real-time Sync (Queue -> C360).
+luồng CDC (Debezium -> Kafka -> Mirror) và luồng Near Real-time Sync (Queue -> C360 -> BI & API).
+
+Hỗ trợ cả 2 chế độ:
+  - Chế độ kiểm thử chuẩn (mặc định `--insert-count 5`): Chạy nhanh < 1 giây cho Unit/Integration Test.
+  - Chế độ bơm lô lớn để Demo Before/After trên BI (`--insert-count 50000` hoặc `--insert-count 100000`):
+    Sinh streaming theo từng batch 5.000 dòng (không tràn RAM), phân bổ thực tế theo 36 tỉnh,
+    dân tộc Kinh/thiểu số, lỗi chất lượng dữ liệu DQ_FLAGS và tỷ lệ lọc nghiệp vụ (~4%),
+    ghi nhận lưu lượng vào MIR_CDC_TOPIC_METRICS để trực quan hóa luồng Kafka CDC.
 
 Bao phủ đầy đủ 4 nhóm thao tác bắt buộc theo mục 3 - Phần 1.1:
 1. INSERT:
-   - 1a: Thêm công dân hoàn toàn mới (MA_CD mới).
+   - 1a: Thêm lô công dân hoàn toàn mới (MA_CD mới, hỗ trợ từ 5 đến 100.000+ dòng).
    - 1b: Thêm dòng hộ gia đình mới (MA_HO_GD mới, NGAY_SUA mới hơn) cho MA_CD đã tồn tại.
 2. UPDATE thông thường:
-   - 2a: Sửa dữ liệu bẩn (địa chỉ 99/99999, ngày sinh sai, CCCD sai, SĐT sai) sang sạch -> gỡ cờ DQ_FLAGS.
+   - 2a: Sửa dữ liệu bẩn sang sạch -> gỡ cờ DQ_FLAGS.
    - 2b: Đổi TRANG_THAI_DUYET sang (1, 3, 4) hoặc TYPEID sang ('GG', 'GT') -> loại khỏi C360.
-   - 2c: Đổi TINH_TRANG_SONG từ 1 -> 0 (kèm NGAY_CHET) -> TRANG_THAI_HIEU_LUC về 0.
+   - 2c: Đổi TINH_TRANG_SONG từ 1 -> 0 (kèm NGAY_CHET) -> IS_ALIVE = 0.
 3. UPDATE đổi mã định danh MA_CD (Cấp lại mã số BHXH):
-   - Đổi MA_CD từ MA_CD_A sang MA_CD_B, lưu MA_CD_A vào cột MA_CD_OLD, cập nhật NGAY_SUA
-     -> Xóa/tính lại MA_CD_A cũ (không để mồ côi) và tạo/cập nhật MA_CD_B mới.
+   - Đổi MA_CD từ MA_CD_A sang MA_CD_B, lưu MA_CD_A vào MA_CD_OLD -> xóa sạch mã cũ trên C360.
 4. DELETE:
-   - 4a: Xóa dòng hộ gia đình mới nhất của công dân có 2 hộ gia đình -> C360 tự động lùi về dòng hộ cũ còn lại.
-   - 4b: Xóa toàn bộ dòng của công dân chỉ có 1 hộ gia đình -> C360 xóa hẳn công dân đó.
+   - 4a: Xóa dòng hộ mới nhất của công dân có 2 hộ -> C360 tự động lùi về hộ cũ còn lại.
+   - 4b: Xóa toàn bộ dòng của công dân chỉ có 1 hộ -> C360 xóa hẳn công dân đó.
 """
 
 import argparse
 import json
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -41,23 +48,29 @@ from p1_source_and_mirror.db_env import (
     NHANKHAU_COLUMNS,
     get_connection,
     get_db_engine,
+    init_c360_schema,
     init_source_and_mirror_schema,
 )
+from p1_source_and_mirror.gen_seed_nhankhau import (
+    DEM_NAM,
+    DEM_NU,
+    HO_LIST,
+    TEN_NAM,
+    TEN_NU,
+    fetch_reference_pools,
+    make_empty_row,
+    remove_accents,
+)
+
+CDC_TOPIC_NAME = "vss.VSS.VSS_HO_GD_NHANKHAU"
+APPROX_CDC_MSG_BYTES = 2870  # ~2.8 KB JSON Debezium envelope (before + after + source metadata)
 
 
-def sync_cdc_events_to_mirror(conn: Any, cdc_events: List[Dict[str, Any]]) -> Dict[str, int]:
-    """
-    Mô phỏng chính xác cơ chế Debezium Source + Kafka JDBC Sink (insert.mode=upsert,
-    pk.mode=record_key, pk.fields=MA_CD,MA_HO_GD, delete.enabled=true) khi chạy ở chế độ Local
-    hoặc khi cần đẩy ngay lô CDC sang bảng Mirror.
-    """
-    cur = conn.cursor()
-    col_names = [c for c, _ in NHANKHAU_COLUMNS]
+def _get_mirror_upsert_sql(col_names: List[str]) -> str:
     col_list_str = ", ".join(col_names)
     placeholders = ", ".join(["?"] * len(col_names))
     update_set_str = ", ".join([f"{c} = excluded.{c}" for c in col_names if c not in ("MA_CD", "MA_HO_GD")])
-
-    upsert_sql = f"""
+    return f"""
         INSERT INTO MIR_VSS_HO_GD_NHANKHAU ({col_list_str}, MIRROR_SYNC_TS)
         VALUES ({placeholders}, datetime('now', 'localtime'))
         ON CONFLICT(MA_CD, MA_HO_GD) DO UPDATE SET
@@ -65,14 +78,24 @@ def sync_cdc_events_to_mirror(conn: Any, cdc_events: List[Dict[str, Any]]) -> Di
             MIRROR_SYNC_TS = datetime('now', 'localtime')
     """
 
+
+def _norm_mirror_tuple(row_dict: Dict[str, Any], col_names: List[str]) -> Tuple[Any, ...]:
+    ho_gd = row_dict.get("MA_HO_GD")
+    norm_ho = str(ho_gd).strip() if (ho_gd is not None and str(ho_gd).strip()) else "HO_MAC_DINH"
+    return tuple((norm_ho if c == "MA_HO_GD" else row_dict.get(c)) for c in col_names)
+
+
+def sync_cdc_events_to_mirror(conn: Any, cdc_events: List[Dict[str, Any]]) -> Dict[str, int]:
+    """
+    Mô phỏng chính xác cơ chế Debezium Source + Kafka JDBC Sink (insert.mode=upsert,
+    pk.mode=record_key, pk.fields=MA_CD,MA_HO_GD, delete.enabled=true).
+    """
+    cur = conn.cursor()
+    col_names = [c for c, _ in NHANKHAU_COLUMNS]
+    upsert_sql = _get_mirror_upsert_sql(col_names)
+
     upserted = 0
     deleted = 0
-
-    def _norm_row(row_dict: Dict[str, Any]) -> Tuple[Any, ...]:
-        d = dict(row_dict)
-        ho_gd = d.get("MA_HO_GD")
-        d["MA_HO_GD"] = str(ho_gd).strip() if (ho_gd is not None and str(ho_gd).strip()) else "HO_MAC_DINH"
-        return tuple(d[c] for c in col_names)
 
     for ev in cdc_events:
         op = ev["op"]
@@ -83,20 +106,19 @@ def sync_cdc_events_to_mirror(conn: Any, cdc_events: List[Dict[str, Any]]) -> Di
                 "DELETE FROM MIR_VSS_HO_GD_NHANKHAU WHERE MA_CD = ? AND MA_HO_GD = ?",
                 (ev["before"]["MA_CD"], norm_ho_gd),
             )
-            deleted += cur.rowcount
+            deleted += cur.rowcount if cur.rowcount > 0 else 0
         elif op == "UPDATE_PK":
-            # Debezium phát 1 bản ghi DELETE cho khóa cũ (MA_CD_A, MA_HO_GD) + 1 bản ghi UPSERT cho khóa mới (MA_CD_B, MA_HO_GD)
             ho_gd = ev["before"].get("MA_HO_GD")
             norm_ho_gd = str(ho_gd).strip() if (ho_gd is not None and str(ho_gd).strip()) else "HO_MAC_DINH"
             cur.execute(
                 "DELETE FROM MIR_VSS_HO_GD_NHANKHAU WHERE MA_CD = ? AND MA_HO_GD = ?",
                 (ev["before"]["MA_CD"], norm_ho_gd),
             )
-            deleted += cur.rowcount
-            cur.execute(upsert_sql, _norm_row(ev["after"]))
+            deleted += cur.rowcount if cur.rowcount > 0 else 0
+            cur.execute(upsert_sql, _norm_mirror_tuple(ev["after"], col_names))
             upserted += 1
         elif op in ("INSERT", "UPDATE"):
-            cur.execute(upsert_sql, _norm_row(ev["after"]))
+            cur.execute(upsert_sql, _norm_mirror_tuple(ev["after"], col_names))
             upserted += 1
 
     conn.commit()
@@ -112,24 +134,158 @@ def fetch_row_as_dict(cur: Any, row_id: int) -> Optional[Dict[str, Any]]:
     return dict(zip(col_names, r))
 
 
+def _build_bulk_citizen_row(
+    seq_idx: int,
+    row_id: int,
+    pools: Dict[str, Any],
+    now_ts: str,
+) -> Dict[str, Any]:
+    """Sinh 1 dòng công dân mới theo phân phối thực tế (dân tộc, tỉnh trọng điểm, lỗi DQ & lọc nghiệp vụ)."""
+    active_wards = pools["active_wards"]
+    merged_wards = pools["merged_wards_1to1"]
+    valid_dantoc = pools["valid_dantoc"]
+
+    new_ma_cd = f"99{seq_idx:08d}"
+    gioi_tinh = 1 if (seq_idx % 2 == 1) else 2
+    ho = HO_LIST[seq_idx % len(HO_LIST)]
+    dem = DEM_NAM[seq_idx % len(DEM_NAM)] if gioi_tinh == 1 else DEM_NU[seq_idx % len(DEM_NU)]
+    ten = TEN_NAM[seq_idx % len(TEN_NAM)] if gioi_tinh == 1 else TEN_NU[seq_idx % len(TEN_NU)]
+
+    # 5 dòng đầu tiên (9900000001..9900000005) luôn giữ hợp lệ sạch để tương thích 100% với Unit Test
+    is_protected_seed = seq_idx <= 5
+
+    ho_ten = f"  {ho}   {dem}   {ten}  " if (not is_protected_seed and seq_idx % 20 == 0) else f"{ho} {dem} {ten}"
+    ho_ten_kd = remove_accents(f"{ho} {dem} {ten}")
+
+    is_typeid_g = (not is_protected_seed) and (seq_idx % 50 == 1)
+    is_unapproved = (not is_protected_seed) and (seq_idx % 50 == 2)
+
+    ward_new, tinh_new, ward_name = active_wards[seq_idx % len(active_wards)]
+    ward_lh, tinh_lh, ward_lh_name = active_wards[(seq_idx + 11) % len(active_wards)]
+
+    ma_tinh = tinh_new
+    ma_xa = ward_new
+    ma_tinh_lh = tinh_lh
+    ma_xa_lh = ward_lh
+
+    if not is_protected_seed and not is_typeid_g and not is_unapproved:
+        ab = seq_idx % 100
+        if ab in (15, 16, 17, 18) and merged_wards:
+            old_xa, _, new_tinh = merged_wards[seq_idx % len(merged_wards)]
+            ma_tinh, ma_xa = new_tinh, old_xa
+        elif ab == 23:
+            ma_tinh, ma_xa = None, "00999"
+        elif ab in (26, 27):
+            ma_tinh = "01" if tinh_new != "01" else "79"
+        elif ab in (30, 31):
+            ma_tinh, ma_xa = "99", "99999"
+        elif ab == 32:
+            ma_tinh_lh, ma_xa_lh = "99", "99999"
+        elif ab == 33:
+            ma_tinh_lh = "01" if tinh_lh != "01" else "79"
+
+    birth_year = 1955 + (seq_idx % 68)
+    birth_month = (seq_idx % 12) + 1
+    birth_day = (seq_idx % 28) + 1
+    ngay_sinh: Optional[int] = int(f"{birth_year:04d}{birth_month:02d}{birth_day:02d}")
+    if not is_protected_seed and (seq_idx % 100 == 40):
+        ngay_sinh = 19950230
+
+    cccd_val: Optional[str] = f"0{tinh_new[:2].zfill(2)}{gioi_tinh - 1}{str(birth_year)[-2:]}{(800000 + seq_idx) % 1000000:06d}"
+    so_cmtnd: Optional[str] = None
+    if not is_protected_seed and (seq_idx % 100 in (43, 44)):
+        cccd_val = None
+        so_cmtnd = f"{200000000 + (seq_idx % 700000000):09d}"
+    elif not is_protected_seed and (seq_idx % 100 == 45):
+        cccd_val = "000000000000"
+
+    phone_val = f"09{(10000000 + seq_idx) % 90000000:08d}"
+    if not is_protected_seed and (seq_idx % 100 == 49):
+        phone_val = "0000000000"
+
+    quoc_tich = "VN"
+    if not is_protected_seed and (seq_idx % 100 == 55):
+        quoc_tich = "ZZ_INVALID"
+
+    dm_dan_toc_id = 171 if (seq_idx % 6 != 0) else valid_dantoc[seq_idx % len(valid_dantoc)]
+    if not is_protected_seed and (seq_idx % 100 == 56):
+        dm_dan_toc_id = 248
+
+    r = make_empty_row()
+    r["ID"] = row_id
+    r["MA_CD"] = new_ma_cd
+    r["MA_HO_GD"] = f"HGD_DLT_{seq_idx:07d}"
+    r["HO_TEN"] = ho_ten
+    r["HO_TEN_KD"] = ho_ten_kd
+    r["TEN_KD"] = remove_accents(ten)
+    r["SO_SO_BHXH"] = new_ma_cd
+    r["GIOI_TINH"] = gioi_tinh
+    r["NGAY_SINH"] = ngay_sinh
+    r["QUOC_TICH"] = quoc_tich
+    r["DM_DAN_TOC_ID"] = dm_dan_toc_id
+    r["SO_CCCD"] = cccd_val
+    r["SO_CMTND"] = so_cmtnd
+    r["PHONE_NUMBER"] = phone_val
+    r["MA_TINH"] = ma_tinh
+    r["MA_XA"] = ma_xa
+    r["DIA_CHI"] = f"Số {seq_idx % 300 + 1}, {ward_name}"
+    r["MA_TINH_HK"] = ma_tinh
+    r["MA_XA_HK"] = ma_xa
+    r["DIA_CHI_HK"] = r["DIA_CHI"]
+    r["MA_TINH_LH"] = ma_tinh_lh
+    r["MA_XA_LH"] = ma_xa_lh
+    r["DIA_CHI_LH"] = f"LH {ward_lh_name}"
+    r["MA_TINH_KS"] = tinh_new
+    r["MA_XA_KS"] = ward_new
+    r["DIA_CHI_KS"] = f"KS {ward_name}"
+    r["TRANG_THAI"] = 1
+    r["TINH_TRANG_SONG"] = 1
+    r["TYPEID"] = "GT" if is_typeid_g else "TM"
+    r["TRANG_THAI_DUYET"] = 1 if is_unapproved else 2
+    r["NGAY_TAO"] = now_ts
+    r["NGAY_SUA"] = now_ts
+    r["NGUOI_TAO"] = "DELTA_GEN"
+    r["NGUOI_SUA"] = "DELTA_GEN"
+    return r
+
+
 def apply_delta_changes(
     conn: Any,
     sync_to_mirror: bool = True,
     out_dir: Optional[Path] = None,
+    bulk_insert_count: int = 5,
+    batch_size: int = 5000,
 ) -> Dict[str, Any]:
+    t0 = time.perf_counter()
+    init_source_and_mirror_schema(conn)
+    init_c360_schema(conn)
+
     cur = conn.cursor()
     col_names = [c for c, _ in NHANKHAU_COLUMNS]
     placeholders = ", ".join(["?"] * len(col_names))
     insert_sql = f"INSERT INTO VSS_HO_GD_NHANKHAU ({', '.join(col_names)}) VALUES ({placeholders})"
+    mirror_upsert_sql = _get_mirror_upsert_sql(col_names)
+
+    now_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    pools = fetch_reference_pools(conn)
+
+    # Đảm bảo tính idempotent nếu chạy lại dải mã '99%'
+    max_new_ma_cd = f"99{bulk_insert_count:08d}"
+    cur.execute(
+        "DELETE FROM VSS_HO_GD_NHANKHAU WHERE MA_CD >= '9900000001' AND MA_CD <= ?;",
+        (max_new_ma_cd,),
+    )
+    conn.commit()
 
     cur.execute("SELECT COALESCE(MAX(ID), 0) FROM VSS_HO_GD_NHANKHAU")
     next_id = (cur.fetchone()[0] or 0) + 1
-    now_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     cdc_events: List[Dict[str, Any]] = []
     manifest: Dict[str, Any] = {
         "executed_at": now_ts,
-        "inserted_new_citizens": [],
+        "bulk_insert_requested": bulk_insert_count,
+        "inserted_new_citizens_count": 0,
+        "inserted_new_citizens": [],  # Giữ tối đa 20 mẫu đầu trong JSON để tránh phình file khi bơm 100k dòng
         "inserted_new_household_for_existing": [],
         "updated_dirty_to_clean": [],
         "updated_status_to_filtered_out": [],
@@ -140,53 +296,43 @@ def apply_delta_changes(
     }
 
     # -------------------------------------------------------------------------
-    # 1a. INSERT công dân hoàn toàn mới (5 công dân mới)
+    # 1a. INSERT lô công dân mới (Streaming theo batch_size để chống OOM khi bơm 50k-100k dòng)
     # -------------------------------------------------------------------------
-    for i in range(1, 6):
-        new_ma_cd = f"9900000{i:03d}"
-        # Đảm bảo idempotent nếu chạy lại
-        cur.execute("DELETE FROM VSS_HO_GD_NHANKHAU WHERE MA_CD = ?", (new_ma_cd,))
-        row = {c: None for c in col_names}
-        row["ID"] = next_id
-        next_id += 1
-        row["MA_CD"] = new_ma_cd
-        row["MA_HO_GD"] = f"HGD_NEW_{i:04d}"
-        row["HO_TEN"] = f"NGUYỄN MỚI THÊM {i}"
-        row["HO_TEN_KD"] = f"NGUYEN MOI THEM {i}"
-        row["TEN_KD"] = f"THEM{i}"
-        row["SO_SO_BHXH"] = new_ma_cd
-        row["GIOI_TINH"] = 1 if i % 2 == 1 else 2
-        row["NGAY_SINH"] = 19950820
-        row["QUOC_TICH"] = "VN"
-        row["DM_DAN_TOC_ID"] = 171
-        row["SO_CCCD"] = f"001095990{i:03d}"
-        row["PHONE_NUMBER"] = f"0988777{i:03d}"
-        row["MA_TINH"] = "01"
-        row["MA_XA"] = "00004"
-        row["DIA_CHI"] = f"Số {i} Ba Đình, Hà Nội"
-        row["MA_TINH_HK"] = "01"
-        row["MA_XA_HK"] = "00004"
-        row["DIA_CHI_HK"] = row["DIA_CHI"]
-        row["MA_TINH_LH"] = "01"
-        row["MA_XA_LH"] = "00004"
-        row["DIA_CHI_LH"] = row["DIA_CHI"]
-        row["MA_TINH_KS"] = "01"
-        row["MA_XA_KS"] = "00004"
-        row["DIA_CHI_KS"] = row["DIA_CHI"]
-        row["TRANG_THAI"] = 1
-        row["TINH_TRANG_SONG"] = 1
-        row["TRANG_THAI_DUYET"] = 2
-        row["TYPEID"] = "TM"
-        row["NGAY_TAO"] = "2026-11-10 09:00:00"
-        row["NGAY_SUA"] = "2026-11-10 09:00:00"
-        row["NGUOI_TAO"] = "DELTA_GEN"
-        row["NGUOI_SUA"] = "DELTA_GEN"
+    bulk_mirror_upserted = 0
+    src_batch: List[Tuple[Any, ...]] = []
+    mir_batch: List[Tuple[Any, ...]] = []
 
-        cur.execute(insert_sql, tuple(row[c] for c in col_names))
-        cdc_events.append({"op": "INSERT", "after": row})
-        manifest["inserted_new_citizens"].append(
-            {"MA_CD": new_ma_cd, "MA_HO_GD": row["MA_HO_GD"], "ID": row["ID"]}
-        )
+    for i in range(1, bulk_insert_count + 1):
+        row = _build_bulk_citizen_row(i, next_id, pools, now_ts)
+        next_id += 1
+        src_batch.append(tuple(row[c] for c in col_names))
+        if sync_to_mirror:
+            mir_batch.append(_norm_mirror_tuple(row, col_names))
+
+        if len(manifest["inserted_new_citizens"]) < 20:
+            manifest["inserted_new_citizens"].append(
+                {"MA_CD": row["MA_CD"], "MA_HO_GD": row["MA_HO_GD"], "ID": row["ID"]}
+            )
+
+        if len(src_batch) >= batch_size:
+            cur.executemany(insert_sql, src_batch)
+            if sync_to_mirror and mir_batch:
+                cur.executemany(mirror_upsert_sql, mir_batch)
+                bulk_mirror_upserted += len(mir_batch)
+                mir_batch.clear()
+            conn.commit()
+            src_batch.clear()
+
+    if src_batch:
+        cur.executemany(insert_sql, src_batch)
+        if sync_to_mirror and mir_batch:
+            cur.executemany(mirror_upsert_sql, mir_batch)
+            bulk_mirror_upserted += len(mir_batch)
+            mir_batch.clear()
+        conn.commit()
+        src_batch.clear()
+
+    manifest["inserted_new_citizens_count"] = bulk_insert_count
 
     # -------------------------------------------------------------------------
     # 1b. INSERT hộ gia đình mới cho công dân đã tồn tại (chọn 3 công dân đang có 1 hộ hợp lệ)
@@ -197,7 +343,7 @@ def apply_delta_changes(
         FROM VSS_HO_GD_NHANKHAU
         WHERE COALESCE(TYPEID, 'ZZ') NOT IN ('GT', 'GM', 'GG', 'GK')
           AND COALESCE(TRANG_THAI_DUYET, 0) NOT IN (1, 3, 4)
-          AND MA_CD NOT LIKE '99%'
+          AND MA_CD NOT LIKE '99%' AND MA_CD NOT LIKE '88%'
         GROUP BY MA_CD
         HAVING COUNT(*) = 1
         ORDER BY MA_CD
@@ -205,7 +351,7 @@ def apply_delta_changes(
         """
     )
     existing_single = cur.fetchall()
-    for idx, (ma_cd, old_id) in enumerate(existing_single, start=1):
+    for ma_cd, old_id in existing_single:
         base_row = fetch_row_as_dict(cur, old_id)
         if not base_row:
             continue
@@ -219,9 +365,10 @@ def apply_delta_changes(
         new_row["MA_TINH_HK"] = "79"
         new_row["MA_XA_HK"] = "26734"
         new_row["DIA_CHI_HK"] = new_row["DIA_CHI"]
-        new_row["NGAY_TAO"] = "2026-11-10 09:30:00"
-        new_row["NGAY_SUA"] = "2026-11-10 09:30:00"
+        new_row["NGAY_TAO"] = now_ts
+        new_row["NGAY_SUA"] = now_ts
 
+        cur.execute("DELETE FROM VSS_HO_GD_NHANKHAU WHERE MA_CD = ? AND MA_HO_GD = ?", (ma_cd, new_row["MA_HO_GD"]))
         cur.execute(insert_sql, tuple(new_row[c] for c in col_names))
         cdc_events.append({"op": "INSERT", "after": new_row})
         manifest["inserted_new_household_for_existing"].append(
@@ -236,7 +383,7 @@ def apply_delta_changes(
         )
 
     # -------------------------------------------------------------------------
-    # 2a. UPDATE dữ liệu bẩn -> sạch (chọn các dòng có MA_TINH = '99' hoặc NGAY_SINH sai)
+    # 2a. UPDATE dữ liệu bẩn -> sạch (chọn 5 dòng có lỗi địa chỉ/ngày sinh/CCCD)
     # -------------------------------------------------------------------------
     cur.execute(
         """
@@ -244,6 +391,7 @@ def apply_delta_changes(
         FROM VSS_HO_GD_NHANKHAU
         WHERE COALESCE(TYPEID, 'ZZ') NOT IN ('GT', 'GM', 'GG', 'GK')
           AND COALESCE(TRANG_THAI_DUYET, 0) NOT IN (1, 3, 4)
+          AND MA_CD NOT LIKE '99%'
           AND (MA_TINH = '99' OR NGAY_SINH IN (19950230, 17500101, '19950230', '17500101') OR SO_CCCD = '000000000000')
         ORDER BY ID
         LIMIT 5
@@ -268,10 +416,10 @@ def apply_delta_changes(
                 PHONE_NUMBER = '0912888999',
                 QUOC_TICH = 'VN',
                 DM_DAN_TOC_ID = 171,
-                NGAY_SUA = '2026-11-10 10:00:00'
+                NGAY_SUA = ?
             WHERE ID = ?
             """,
-            (row_id,),
+            (now_ts, row_id),
         )
         updated_row = fetch_row_as_dict(cur, row_id)
         if updated_row:
@@ -281,7 +429,7 @@ def apply_delta_changes(
             )
 
     # -------------------------------------------------------------------------
-    # 2b. UPDATE đổi TRANG_THAI_DUYET sang (1, 3, 4) hoặc TYPEID sang ('GG', 'GT') (chọn 4 công dân có 1 hộ)
+    # 2b. UPDATE đổi TRANG_THAI_DUYET sang (1, 3, 4) hoặc TYPEID sang ('GG', 'GT')
     # -------------------------------------------------------------------------
     cur.execute(
         """
@@ -289,7 +437,7 @@ def apply_delta_changes(
         FROM VSS_HO_GD_NHANKHAU
         WHERE COALESCE(TYPEID, 'ZZ') NOT IN ('GT', 'GM', 'GG', 'GK')
           AND COALESCE(TRANG_THAI_DUYET, 0) NOT IN (1, 3, 4)
-          AND MA_CD NOT LIKE '99%'
+          AND MA_CD NOT LIKE '99%' AND MA_CD NOT LIKE '88%'
           AND MA_CD > '0000000020'
         GROUP BY MA_CD
         HAVING COUNT(*) = 1
@@ -302,15 +450,15 @@ def apply_delta_changes(
         if idx % 2 == 0:
             new_tt_duyet = [4, 3, 1][(idx // 2) % 3]
             cur.execute(
-                "UPDATE VSS_HO_GD_NHANKHAU SET TRANG_THAI_DUYET = ?, NGAY_SUA = '2026-11-10 10:05:00' WHERE ID = ?",
-                (new_tt_duyet, row_id),
+                "UPDATE VSS_HO_GD_NHANKHAU SET TRANG_THAI_DUYET = ?, NGAY_SUA = ? WHERE ID = ?",
+                (new_tt_duyet, now_ts, row_id),
             )
             reason = f"TRANG_THAI_DUYET={new_tt_duyet}"
         else:
             new_typeid = "GG" if (idx // 2) % 2 == 0 else "GT"
             cur.execute(
-                "UPDATE VSS_HO_GD_NHANKHAU SET TYPEID = ?, NGAY_SUA = '2026-11-10 10:05:00' WHERE ID = ?",
-                (new_typeid, row_id),
+                "UPDATE VSS_HO_GD_NHANKHAU SET TYPEID = ?, NGAY_SUA = ? WHERE ID = ?",
+                (new_typeid, now_ts, row_id),
             )
             reason = f"TYPEID='{new_typeid}'"
         updated_row = fetch_row_as_dict(cur, row_id)
@@ -321,7 +469,7 @@ def apply_delta_changes(
             )
 
     # -------------------------------------------------------------------------
-    # 2c. UPDATE đổi TINH_TRANG_SONG từ 1 -> 0 (vẫn giữ trên C360 nhưng TRANG_THAI_HIEU_LUC = 0)
+    # 2c. UPDATE đổi TINH_TRANG_SONG từ 1 -> 0 (vẫn giữ trên C360 nhưng IS_ALIVE = 0)
     # -------------------------------------------------------------------------
     cur.execute(
         """
@@ -330,6 +478,7 @@ def apply_delta_changes(
         WHERE COALESCE(TYPEID, 'ZZ') NOT IN ('GT', 'GM', 'GG', 'GK')
           AND COALESCE(TRANG_THAI_DUYET, 0) NOT IN (1, 3, 4)
           AND TINH_TRANG_SONG = 1 AND TRANG_THAI = 1
+          AND MA_CD NOT LIKE '99%' AND MA_CD NOT LIKE '88%'
           AND MA_CD > '0000000050'
         GROUP BY MA_CD
         HAVING COUNT(*) = 1
@@ -342,10 +491,10 @@ def apply_delta_changes(
         cur.execute(
             """
             UPDATE VSS_HO_GD_NHANKHAU
-            SET TINH_TRANG_SONG = 0, NGAY_CHET = '20261101', NGAY_SUA = '2026-11-10 10:10:00'
+            SET TINH_TRANG_SONG = 0, NGAY_CHET = '20261101', NGAY_SUA = ?
             WHERE ID = ?
             """,
-            (row_id,),
+            (now_ts, row_id),
         )
         updated_row = fetch_row_as_dict(cur, row_id)
         if updated_row:
@@ -363,6 +512,7 @@ def apply_delta_changes(
         FROM VSS_HO_GD_NHANKHAU
         WHERE COALESCE(TYPEID, 'ZZ') NOT IN ('GT', 'GM', 'GG', 'GK')
           AND COALESCE(TRANG_THAI_DUYET, 0) NOT IN (1, 3, 4)
+          AND MA_CD NOT LIKE '99%' AND MA_CD NOT LIKE '88%'
           AND MA_CD > '0000000080'
         GROUP BY MA_CD
         HAVING COUNT(*) = 1
@@ -381,10 +531,10 @@ def apply_delta_changes(
             SET MA_CD = ?,
                 MA_CD_OLD = ?,
                 SO_SO_BHXH = ?,
-                NGAY_SUA = '2026-11-10 10:20:00'
+                NGAY_SUA = ?
             WHERE ID = ?
             """,
-            (new_ma_cd, old_ma_cd, new_ma_cd, row_id),
+            (new_ma_cd, old_ma_cd, new_ma_cd, now_ts, row_id),
         )
         after_row = fetch_row_as_dict(cur, row_id)
         if before_row and after_row:
@@ -442,6 +592,7 @@ def apply_delta_changes(
         FROM VSS_HO_GD_NHANKHAU
         WHERE COALESCE(TYPEID, 'ZZ') NOT IN ('GT', 'GM', 'GG', 'GK')
           AND COALESCE(TRANG_THAI_DUYET, 0) NOT IN (1, 3, 4)
+          AND MA_CD NOT LIKE '99%' AND MA_CD NOT LIKE '88%'
           AND MA_CD > '0000000120'
         GROUP BY MA_CD
         HAVING COUNT(*) = 1
@@ -461,9 +612,60 @@ def apply_delta_changes(
 
     conn.commit()
 
+    op_insert = bulk_insert_count + len(manifest["inserted_new_household_for_existing"])
+    op_update = (
+        len(manifest["updated_dirty_to_clean"])
+        + len(manifest["updated_status_to_filtered_out"])
+        + len(manifest["updated_status_to_deceased"])
+        + len(manifest["updated_ma_cd_reissued"])
+    )
+    op_delete = (
+        len(manifest["deleted_latest_household_fallback"])
+        + len(manifest["deleted_single_household_citizen"])
+    )
+    total_cdc_msgs = op_insert + op_update + op_delete + len(manifest["updated_ma_cd_reissued"])
+    payload_bytes = total_cdc_msgs * APPROX_CDC_MSG_BYTES
+
+    total_mirror_upserted = bulk_mirror_upserted
+    total_mirror_deleted = 0
     if sync_to_mirror:
         cdc_stats = sync_cdc_events_to_mirror(conn, cdc_events)
-        manifest["cdc_mirror_sync"] = cdc_stats
+        total_mirror_upserted += cdc_stats["mirror_upserted"]
+        total_mirror_deleted += cdc_stats["mirror_deleted"]
+        manifest["cdc_mirror_sync"] = {
+            "mirror_upserted": total_mirror_upserted,
+            "mirror_deleted": total_mirror_deleted,
+        }
+
+    # Ghi nhận thông số lưu lượng Topic CDC vào MIR_CDC_TOPIC_METRICS
+    cur.execute(
+        """
+        INSERT INTO MIR_CDC_TOPIC_METRICS (
+            TOPIC_NAME, PARTITIONS, OP_INSERT, OP_UPDATE, OP_DELETE,
+            TOTAL_MESSAGES, PAYLOAD_BYTES, MIRROR_UPSERTED, MIRROR_DELETED
+        ) VALUES (?, 3, ?, ?, ?, ?, ?, ?, ?);
+        """,
+        (
+            CDC_TOPIC_NAME,
+            op_insert,
+            op_update,
+            op_delete,
+            total_cdc_msgs,
+            payload_bytes,
+            total_mirror_upserted,
+            total_mirror_deleted,
+        ),
+    )
+    conn.commit()
+
+    elapsed_sec = round(time.perf_counter() - t0, 2)
+    manifest["cdc_topic_metrics"] = {
+        "topic": CDC_TOPIC_NAME,
+        "partitions": 3,
+        "messages": total_cdc_msgs,
+        "size_mb": round(payload_bytes / (1024 * 1024), 2),
+        "elapsed_sec": elapsed_sec,
+    }
 
     target_dir = Path(out_dir) if out_dir else (PROJECT_ROOT / "data")
     gt_path = target_dir / "delta_ground_truth.json"
@@ -471,8 +673,9 @@ def apply_delta_changes(
     gt_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(
-        f"[GEN_DELTA_CHANGES] Đã thực thi thành công {len(cdc_events)} biến động trên VSS_HO_GD_NHANKHAU:\n"
-        f"  - INSERT công dân mới                     : {len(manifest['inserted_new_citizens'])}\n"
+        f"[GEN_DELTA_CHANGES] Đã thực thi thành công {total_cdc_msgs:,} thông điệp CDC ({elapsed_sec}s):\n"
+        f"  - Topic Kafka CDC                         : {CDC_TOPIC_NAME} ({total_cdc_msgs:,} msgs ~ {manifest['cdc_topic_metrics']['size_mb']} MB)\n"
+        f"  - INSERT công dân mới                     : {bulk_insert_count:,}\n"
         f"  - INSERT hộ mới cho công dân đã có        : {len(manifest['inserted_new_household_for_existing'])}\n"
         f"  - UPDATE dữ liệu bẩn -> sạch              : {len(manifest['updated_dirty_to_clean'])}\n"
         f"  - UPDATE trạng thái -> loại khỏi C360     : {len(manifest['updated_status_to_filtered_out'])}\n"
@@ -489,16 +692,44 @@ def main():
     parser = argparse.ArgumentParser(description="Script 2: Sinh dữ liệu biến động (Delta/CDC) trên VSS_HO_GD_NHANKHAU")
     parser.add_argument("--db-path", type=str, default=None, help="Đường dẫn file SQLite DB")
     parser.add_argument(
+        "--insert-count",
+        type=int,
+        default=5,
+        help="Số lượng công dân mới cần bơm thêm (vd: 5 cho test nhanh, 50000 hoặc 100000 cho Demo BI)",
+    )
+    parser.add_argument(
         "--no-sync-mirror",
         action="store_true",
         help="Chỉ ghi biến động vào bảng Nguồn VSS_HO_GD_NHANKHAU, không tự động đẩy CDC sang Mirror",
     )
+    parser.add_argument(
+        "--run-nrt",
+        action="store_true",
+        help="Tự động kích hoạt luôn Worker Near Real-time sau khi đẩy CDC sang Mirror",
+    )
     args = parser.parse_args()
 
-    conn = get_connection(sqlite_path=Path(args.db_path) if args.db_path else None)
+    db_path = Path(args.db_path) if args.db_path else None
+    conn = get_connection(sqlite_path=db_path)
     init_source_and_mirror_schema(conn, engine=get_db_engine())
-    apply_delta_changes(conn, sync_to_mirror=not args.no_sync_mirror)
+    apply_delta_changes(
+        conn,
+        sync_to_mirror=not args.no_sync_mirror,
+        bulk_insert_count=max(1, args.insert_count),
+    )
     conn.close()
+
+    if args.run_nrt and not args.no_sync_mirror:
+        from p2_c360_standardization.c360_nrt_worker import run_c360_nrt_batch
+
+        while True:
+            res = run_c360_nrt_batch(sqlite_path=db_path, max_batch_size=10000)
+            if res["status"] in ("EMPTY", "SKIPPED"):
+                break
+            print(
+                f"[NRT_SYNC] Đã xử lý lô Queue: keys={res['processed_keys']:,}, "
+                f"merge={res['merge_count']:,}, delete={res['delete_count']:,} ({res['elapsed_sec']}s)"
+            )
 
 
 if __name__ == "__main__":
