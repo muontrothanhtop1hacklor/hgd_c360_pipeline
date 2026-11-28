@@ -99,26 +99,35 @@ Sau khi dữ liệu công dân được chuẩn hóa sang bảng `C360_THONG_TIN
 
 ---
 
-## 5. Kịch Bản Demo Trực Quan 4 Bước (Before $\rightarrow$ Delta 100k $\rightarrow$ Kafka CDC $\rightarrow$ After BI)
+## 5. Minh Chứng Thực Thi Thực Tế Trên Docker (Metabase BI, Apache Kafka UI & FastAPI)
 
-Thực hiện lần lượt 4 bước sau để minh chứng trực tiếp luồng dữ liệu sống từ Nguồn đến BI & API:
+Toàn bộ luồng biến động (**Before $\rightarrow$ Đẩy biến động Delta & Kafka CDC $\rightarrow$ Chuẩn hóa Near Real-time $\rightarrow$ Phản ánh lên Metabase BI & REST API**) đã được chạy kiểm chứng trực tiếp trên các container thật (`hgd_kafka_kraft`, `hgd_kafka_ui`, `hgd_bi_metabase`):
 
+### 5.1. Dữ liệu ban đầu trên Metabase BI (`95,995` công dân hợp lệ)
+![Metabase BI Before - 95,995 citizens](images/01_metabase_before_95995.png)
+
+### 5.2. CDC đẩy lô biến động lên Apache Kafka (`100,052` messages / `25 MB` trên 3 partitions)
+![UI for Apache Kafka - 100,052 messages](images/02_kafka_ui_100052_msgs.png)
+
+### 5.3. Chuẩn hóa Near Real-time & phản ánh trực tiếp lên Metabase BI (`95,995` $\rightarrow$ `143,985` công dân)
+![Metabase BI After Dark Mode - 143,985 citizens](images/03_metabase_after_143985_dark.png)
+
+![Metabase BI After Admin View - 143,985 citizens](images/04_metabase_after_143985_admin.png)
+
+### 5.4. Dịch vụ 4 REST APIs C360 trên Swagger UI (`/docs`)
+![FastAPI Swagger UI - 4 C360 REST APIs](images/05_rest_api_swagger.png)
+
+### 5.5. Lệnh tái hiện luồng Demo 4 bước
 ```powershell
-# Bước 1 (Dữ liệu ban đầu trên báo cáo): Bật dịch vụ API & mở trình duyệt tại http://localhost:8000/dashboard
-# -> Quan sát Tab 1 "Thông tin cá nhân – Gold": Tổng số người = 48,000 (bật Auto-refresh 5s)
-uvicorn p3_reconciliation_bi_api.api.main:app --host 0.0.0.0 --port 8000
+# 1. Bật container thật: Apache Kafka (9092/29092), UI for Apache Kafka (8090) & Metabase BI (3000)
+docker compose --profile cdc --profile bi up -d kafka kafka-ui metabase
 
-# Bước 2 (Bơm biến động lớn vào bảng nguồn): Mở terminal thứ 2, đẩy thêm 100.000 dòng nhân khẩu mới + UPDATE/DELETE
-python p1_source_and_mirror/gen_delta_changes.py --insert-count 100000
+# 2. Bơm lô biến động nguồn + chuẩn hóa Near Real-time
+python p1_source_and_mirror/gen_delta_changes.py --insert-count 100000 --run-nrt
 
-# Bước 3 (Kiểm tra CDC đẩy lên Kafka & Hàng đợi): Chuyển sang Tab 2 "UI for Apache Kafka & NRT Sync"
-# -> Topic vss.VSS.VSS_HO_GD_NHANKHAU ghi nhận > 100,000 messages (~273.8 MB) và Queue Pending > 100,000
-
-# Bước 4 (Chuẩn hóa Near Real-time & phản ánh lên BI): Chạy Worker NRT (hoặc thêm cờ --run-nrt ở Bước 2)
-python p2_c360_standardization/c360_nrt_worker.py --batch-size 50000
-python p2_c360_standardization/c360_nrt_worker.py --batch-size 60000
+# 3. Chạy đối soát tự động 3 tầng & bật cổng 4 REST APIs (http://localhost:8000/docs)
 python p3_reconciliation_bi_api/reconcile_3_tiers.py
-# -> Quay lại Tab 1: Tổng số người tự động nhảy từ 48,000 lên ~144,000 và Đối soát 3 tầng PASSED 100%!
+uvicorn p3_reconciliation_bi_api.api.main:app --host 0.0.0.0 --port 8000
 ```
 
 ---
