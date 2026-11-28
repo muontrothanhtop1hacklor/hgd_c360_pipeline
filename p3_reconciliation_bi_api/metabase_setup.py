@@ -798,6 +798,8 @@ function toggleAutoRefresh() {{
 }}
 
 renderDashboard(INITIAL_DATA);
+const initialTab = new URLSearchParams(window.location.search).get('tab');
+if (initialTab === 'kafka') {{ switchTab('kafka'); }}
 </script>
 </body>
 </html>"""
